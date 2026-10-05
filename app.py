@@ -61,9 +61,9 @@ def init_sqlite_db():
         )
     ''')
 
-    # Migración automática de columnas para bases de datos existentes
+    # Migración automática de columnas por si la BD ya existía previa a cambios
     cursor.execute("PRAGMA table_info(Pacientes)")
-    existing_cols = [column[1] for column in cursor.fetchall()]
+    existing_cols = [col[1] for col in cursor.fetchall()]
     required_cols = {
         "telefono": "TEXT",
         "email": "TEXT",
@@ -78,7 +78,7 @@ def init_sqlite_db():
             try:
                 cursor.execute(f"ALTER TABLE Pacientes ADD COLUMN {col} {col_type}")
             except Exception as e:
-                print(f"[DB Migration Warning]: {e}")
+                print(f"[Migration Warning]: {e}")
 
     # Tabla Personal Médico
     cursor.execute('''
@@ -169,7 +169,7 @@ def db_query(query, params=(), fetchone=False, fetchall=False, commit=False):
         print(f"[DB Error] Fallo en la consulta ({db_type}): {e}")
         if commit:
             conn.rollback()
-        result = [] if fetchall else None
+        result = False if commit else ([] if fetchall else None)
     finally:
         conn.close()
 
@@ -232,7 +232,7 @@ def consultar_reniec(dni=None):
     return jsonify({"success": False, "message": f"No se encontraron datos para el DNI {dni}."}), 404
 
 # ==========================================
-# ENDPOINTS UNIFICADOS DE PACIENTES (UPSERT)
+# ENDPOINTS UNIFICADOS DE PACIENTES
 # ==========================================
 @app.route('/pacientes')
 def vista_pacientes():
@@ -242,22 +242,22 @@ def vista_pacientes():
 @app.route('/api/pacientes/guardar', methods=['POST'])
 def gestionar_pacientes():
     if request.method == 'POST':
-        data = request.json or request.form or {}
-        dni = data.get('dni')
-        nombres = data.get('nombres')
-        apellidos = data.get('apellidos')
-        telefono = data.get('telefono', '')
-        email = data.get('email', '')
-        direccion = data.get('direccion', '')
-        fecha_nac = data.get('fecha_nacimiento') or data.get('fecha_nac', '')
-        genero = data.get('genero', '')
-        grupo_sangre = data.get('grupo_sanguineo') or data.get('grupo_sangre', '')
-        alergias = data.get('alergias', '')
+        data = request.get_json(force=True, silent=True) or request.form.to_dict() or request.args.to_dict() or {}
+        
+        dni = str(data.get('dni', '')).strip()
+        nombres = str(data.get('nombres', '')).strip()
+        apellidos = str(data.get('apellidos', '')).strip()
+        telefono = str(data.get('telefono', '')).strip()
+        email = str(data.get('email', '')).strip()
+        direccion = str(data.get('direccion', '')).strip()
+        fecha_nac = str(data.get('fecha_nacimiento') or data.get('fecha_nac') or '').strip()
+        genero = str(data.get('genero', '')).strip()
+        grupo_sangre = str(data.get('grupo_sanguineo') or data.get('grupo_sangre') or '').strip()
+        alergias = str(data.get('alergias', '')).strip()
 
         if not dni or not nombres or not apellidos:
             return jsonify({"success": False, "message": "DNI, nombres y apellidos son requeridos."}), 400
 
-        # Verificar si el paciente ya existe para actualizarlo o insertarlo
         existente = db_query("SELECT id FROM Pacientes WHERE dni = ?", (dni,), fetchone=True)
 
         if existente:
@@ -282,10 +282,10 @@ def gestionar_pacientes():
         else:
             return jsonify({"success": False, "message": "No se pudo guardar la información en la base de datos."}), 500
 
-    # Método GET: Listar pacientes
-    query = "SELECT id, dni, nombres, apellidos, telefono, email FROM Pacientes ORDER BY id DESC"
+    # GET: Retorna un arreglo directo de lista para compatibilidad con cachePacientes.map(...)
+    query = "SELECT id, dni, nombres, apellidos, telefono, email, direccion, fecha_nacimiento, genero, grupo_sanguineo, alergias FROM Pacientes ORDER BY id DESC"
     pacientes = db_query(query, fetchall=True) or []
-    return jsonify({"success": True, "data": pacientes}), 200
+    return jsonify(pacientes), 200
 
 # ==========================================
 # ENDPOINTS UNIFICADOS DE PERSONAL MÉDICO
@@ -298,14 +298,15 @@ def vista_personal_medico():
 @app.route('/api/personal_medico/guardar', methods=['POST'])
 def gestionar_personal_medico():
     if request.method == 'POST':
-        data = request.json or request.form or {}
-        dni = data.get('dni')
-        nombres = data.get('nombres')
-        apellidos = data.get('apellidos')
-        colegiatura = data.get('colegiatura', '')
-        especialidad = data.get('especialidad', '')
-        telefono = data.get('telefono', '')
-        email = data.get('email', '')
+        data = request.get_json(force=True, silent=True) or request.form.to_dict() or request.args.to_dict() or {}
+        
+        dni = str(data.get('dni', '')).strip()
+        nombres = str(data.get('nombres', '')).strip()
+        apellidos = str(data.get('apellidos', '')).strip()
+        colegiatura = str(data.get('colegiatura', '')).strip()
+        especialidad = str(data.get('especialidad', '')).strip()
+        telefono = str(data.get('telefono', '')).strip()
+        email = str(data.get('email', '')).strip()
 
         if not dni or not nombres or not apellidos:
             return jsonify({"success": False, "message": "DNI, nombres y apellidos son requeridos."}), 400
@@ -334,29 +335,29 @@ def gestionar_personal_medico():
         else:
             return jsonify({"success": False, "message": "No se pudo guardar la información del personal médico."}), 500
 
-    # Método GET: Listar médicos
+    # GET: Retorna un arreglo directo
     query = "SELECT id, dni, nombres, apellidos, colegiatura, especialidad, telefono, email FROM PersonalMedico ORDER BY id DESC"
     medicos = db_query(query, fetchall=True) or []
-    return jsonify({"success": True, "data": medicos}), 200
+    return jsonify(medicos), 200
 
 # ==========================================
 # ENDPOINTS DE RESPALDO
 # ==========================================
 @app.route('/api/citas', methods=['GET', 'POST'])
 def api_citas():
-    return jsonify({"success": True, "data": []}), 200
+    return jsonify([]), 200
 
 @app.route('/api/facturacion', methods=['GET', 'POST'])
 def api_facturacion():
-    return jsonify({"success": True, "data": []}), 200
+    return jsonify([]), 200
 
 @app.route('/api/laboratorio', methods=['GET', 'POST'])
 def api_laboratorio():
-    return jsonify({"success": True, "data": []}), 200
+    return jsonify([]), 200
 
 @app.route('/api/notificaciones', methods=['GET', 'POST'])
 def api_notificaciones():
-    return jsonify({"success": True, "data": []}), 200
+    return jsonify([]), 200
 
 # ==========================================
 # RUTAS DE VISTAS DE NAVEGACIÓN
