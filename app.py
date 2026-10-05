@@ -21,32 +21,25 @@ SQLITE_DB_PATH = os.path.join(os.path.dirname(__file__), "medcontrol.db")
 # HELPER DE RENDERIZADO SEGURO DE PLANTILLAS
 # ==========================================
 def safe_render_template(template_name, **context):
-    """
-    Renderiza una plantilla HTML. Si no la encuentra, busca una alternativa
-    disponible para evitar que la aplicación falle con un error HTTP 500.
-    """
     templates_dir = os.path.join(os.path.dirname(__file__), 'templates')
     target_path = os.path.join(templates_dir, template_name)
     
     if os.path.exists(target_path):
         return render_template(template_name, **context)
     
-    # Alternativas si la plantilla solicitada no fue subida a Git
     for fallback in ['index.html', 'pacientes.html']:
         if os.path.exists(os.path.join(templates_dir, fallback)):
             return render_template(fallback, **context)
             
     return (
         f"<h2>MedControl Pro Activo</h2>"
-        f"<p>No se encontró la plantilla <code>{template_name}</code> en la carpeta <code>templates/</code>.</p>"
-        f"<p>Puedes acceder a las APIs en <a href='/api/pacientes'>/api/pacientes</a></p>", 200
+        f"<p>No se encontró la plantilla <code>{template_name}</code> en la carpeta <code>templates/</code>.</p>", 200
     )
 
 # ==========================================
 # INICIALIZACIÓN DE BASE DE DATOS SQLITE
 # ==========================================
 def init_sqlite_db():
-    """Crea la estructura de tablas necesarias en SQLite si no existen."""
     conn = sqlite3.connect(SQLITE_DB_PATH)
     cursor = conn.cursor()
     
@@ -101,14 +94,12 @@ def init_sqlite_db():
     conn.commit()
     conn.close()
 
-# Inicializar BD SQLite al arrancar
 init_sqlite_db()
 
 # ==========================================
 # CONEXIÓN Y CONSULTAS A LA BASE DE DATOS
 # ==========================================
 def get_db_connection():
-    """Conecta a SQL Server local o commuta a SQLite si está en Render o no hay SQL Server."""
     if IS_RENDER or not HAS_PYODBC:
         conn = sqlite3.connect(SQLITE_DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -127,7 +118,6 @@ def get_db_connection():
         return conn, "sqlite"
 
 def db_query(query, params=(), fetchone=False, fetchall=False, commit=False):
-    """Ejecuta consultas de manera unificada para SQLite y SQL Server."""
     conn, db_type = get_db_connection()
     cursor = conn.cursor()
     result = None
@@ -167,17 +157,22 @@ def db_query(query, params=(), fetchone=False, fetchall=False, commit=False):
     return result
 
 # ==========================================
-# INTEGRACIÓN API RENIEC (Decolecta / ApisPerú)
+# INTEGRACIÓN API RENIEC (Rutas flexibles)
 # ==========================================
 @app.route('/api/reniec/<dni>', methods=['GET'])
-def consultar_reniec(dni):
-    if len(dni) != 8 or not dni.isdigit():
-        return jsonify({"success": False, "message": "El DNI debe contener 8 dígitos numéricos."}), 400
+@app.route('/api/reniec', methods=['GET'])
+@app.route('/reniec/<dni>', methods=['GET'])
+def consultar_reniec(dni=None):
+    if not dni:
+        dni = request.args.get('dni') or request.args.get('numero')
+
+    if not dni or len(dni) != 8 or not dni.isdigit():
+        return jsonify({"success": False, "message": "El DNI debe contener exactamente 8 dígitos numéricos."}), 400
 
     token_decolecta = os.environ.get("RENIEC_TOKEN_DECOLECTA")
     token_apisperu = os.environ.get("RENIEC_TOKEN_APISPERU")
 
-    # 1. Intentar consulta con Decolecta
+    # 1. Probar Decolecta
     if token_decolecta:
         try:
             url = f"https://api.decolecta.com/v1/reniec/dni?numero={dni}"
@@ -185,20 +180,20 @@ def consultar_reniec(dni):
             res = requests.get(url, headers=headers, timeout=5)
             if res.status_code == 200:
                 data = res.json()
-                if "nombres" in data or "first_name" in data:
-                    nombres = data.get("nombres") or data.get("first_name", "")
-                    apellido_paterno = data.get("apellidoPaterno") or data.get("first_last_name", "")
-                    apellido_materno = data.get("apellidoMaterno") or data.get("second_last_name", "")
+                nombres = data.get("nombres") or data.get("first_name", "")
+                paterno = data.get("apellidoPaterno") or data.get("first_last_name", "")
+                materno = data.get("apellidoMaterno") or data.get("second_last_name", "")
+                if nombres:
                     return jsonify({
                         "success": True,
                         "nombres": nombres.strip(),
-                        "apellidos": f"{apellido_paterno} {apellido_materno}".strip(),
+                        "apellidos": f"{paterno} {materno}".strip(),
                         "source": "Decolecta"
-                    })
+                    }), 200
         except Exception as e:
             print(f"[RENIEC Decolecta Error]: {e}")
 
-    # 2. Intentar consulta con ApisPerú
+    # 2. Probar ApisPerú
     if token_apisperu:
         try:
             url = f"https://dniruc.apisperu.com/api/v1/dni/{dni}?token={token_apisperu}"
@@ -211,14 +206,14 @@ def consultar_reniec(dni):
                         "nombres": data.get("nombres", "").strip(),
                         "apellidos": f"{data.get('apellidoPaterno', '')} {data.get('apellidoMaterno', '')}".strip(),
                         "source": "ApisPerú"
-                    })
+                    }), 200
         except Exception as e:
             print(f"[RENIEC ApisPerú Error]: {e}")
 
-    return jsonify({"success": False, "message": "No se encontraron datos para el DNI."}), 404
+    return jsonify({"success": False, "message": f"No se encontraron datos para el DNI {dni}."}), 404
 
 # ==========================================
-# ENDPOINTS Y RUTAS DE PACIENTES
+# ENDPOINTS PACIENTES Y PERSONAL MÉDICO
 # ==========================================
 @app.route('/pacientes')
 def vista_pacientes():
@@ -259,9 +254,6 @@ def guardar_paciente():
     else:
         return jsonify({"success": False, "message": "Error al guardar el paciente (posible DNI duplicado)."}), 500
 
-# ==========================================
-# ENDPOINTS Y RUTAS DE PERSONAL MÉDICO
-# ==========================================
 @app.route('/personal_medico')
 def vista_personal_medico():
     return safe_render_template('personal_medico.html')
@@ -335,14 +327,18 @@ def hospitalizacion():
     return safe_render_template('hospitalizacion.html')
 
 # ==========================================
-# CONTROLADORES DE ERRORES HTTP
+# MANEJADORES DE ERROR INTELIGENTES (JSON vs HTML)
 # ==========================================
 @app.errorhandler(500)
 def server_error(e):
+    if request.path.startswith('/api/'):
+        return jsonify({"success": False, "message": f"Error interno en la API: {str(e)}"}), 500
     return f"<h2>Error Interno del Servidor (500)</h2><p>{str(e)}</p>", 500
 
 @app.errorhandler(404)
 def not_found(e):
+    if request.path.startswith('/api/'):
+        return jsonify({"success": False, "message": "Endpoint de API no encontrado."}), 404
     return "<h2>Página no encontrada (404)</h2><p>La ruta especificada no existe.</p>", 404
 
 # ==========================================
