@@ -3,7 +3,7 @@ import sqlite3
 import requests
 from flask import Flask, render_template, request, jsonify
 
-# Opcional: PyODBC para conexión local a SQL Server
+# Intento de importación defensiva de pyodbc para entorno Windows local
 try:
     import pyodbc
     HAS_PYODBC = True
@@ -13,9 +13,34 @@ except ImportError:
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "medcontrol_secret_key_2026")
 
-# Detectar entorno de ejecución
+# Detectar si la app corre en el entorno Linux de Render
 IS_RENDER = os.environ.get("RENDER") is not None
 SQLITE_DB_PATH = os.path.join(os.path.dirname(__file__), "medcontrol.db")
+
+# ==========================================
+# HELPER DE RENDERIZADO SEGURO DE PLANTILLAS
+# ==========================================
+def safe_render_template(template_name, **context):
+    """
+    Renderiza una plantilla HTML. Si no la encuentra, busca una alternativa
+    disponible para evitar que la aplicación falle con un error HTTP 500.
+    """
+    templates_dir = os.path.join(os.path.dirname(__file__), 'templates')
+    target_path = os.path.join(templates_dir, template_name)
+    
+    if os.path.exists(target_path):
+        return render_template(template_name, **context)
+    
+    # Alternativas si la plantilla solicitada no fue subida a Git
+    for fallback in ['index.html', 'pacientes.html']:
+        if os.path.exists(os.path.join(templates_dir, fallback)):
+            return render_template(fallback, **context)
+            
+    return (
+        f"<h2>MedControl Pro Activo</h2>"
+        f"<p>No se encontró la plantilla <code>{template_name}</code> en la carpeta <code>templates/</code>.</p>"
+        f"<p>Puedes acceder a las APIs en <a href='/api/pacientes'>/api/pacientes</a></p>", 200
+    )
 
 # ==========================================
 # INICIALIZACIÓN DE BASE DE DATOS SQLITE
@@ -76,20 +101,19 @@ def init_sqlite_db():
     conn.commit()
     conn.close()
 
-# Ejecutar creación de tablas al iniciar
+# Inicializar BD SQLite al arrancar
 init_sqlite_db()
 
 # ==========================================
 # CONEXIÓN Y CONSULTAS A LA BASE DE DATOS
 # ==========================================
 def get_db_connection():
-    """Conecta a SQL Server local o commuta a SQLite si está en Render o falla SQL Server."""
+    """Conecta a SQL Server local o commuta a SQLite si está en Render o no hay SQL Server."""
     if IS_RENDER or not HAS_PYODBC:
         conn = sqlite3.connect(SQLITE_DB_PATH)
         conn.row_factory = sqlite3.Row
         return conn, "sqlite"
 
-    # Intentar conexión a SQL Server Local
     try:
         server = os.environ.get("DB_SERVER", "localhost\\SQLEXPRESS")
         database = os.environ.get("DB_NAME", "MedControlDB")
@@ -97,19 +121,18 @@ def get_db_connection():
         conn = pyodbc.connect(conn_str, timeout=3)
         return conn, "sqlserver"
     except Exception as e:
-        print(f"[DB Warning] No se pudo conectar a SQL Server ({e}). Usando SQLite local.")
+        print(f"[DB Warning] SQL Server no accesible ({e}). Usando SQLite.")
         conn = sqlite3.connect(SQLITE_DB_PATH)
         conn.row_factory = sqlite3.Row
         return conn, "sqlite"
 
 def db_query(query, params=(), fetchone=False, fetchall=False, commit=False):
-    """Ejecuta consultas de manera agnóstica para SQLite y SQL Server."""
+    """Ejecuta consultas de manera unificada para SQLite y SQL Server."""
     conn, db_type = get_db_connection()
     cursor = conn.cursor()
     result = None
 
     try:
-        # Adaptación ligera de sintaxis entre motores si fuera necesario
         exec_query = query
         if db_type == "sqlserver":
             exec_query = query.replace("AUTOINCREMENT", "IDENTITY(1,1)")
@@ -149,12 +172,12 @@ def db_query(query, params=(), fetchone=False, fetchall=False, commit=False):
 @app.route('/api/reniec/<dni>', methods=['GET'])
 def consultar_reniec(dni):
     if len(dni) != 8 or not dni.isdigit():
-        return jsonify({"success": False, "message": "DNI debe tener 8 dígitos numéricos."}), 400
+        return jsonify({"success": False, "message": "El DNI debe contener 8 dígitos numéricos."}), 400
 
     token_decolecta = os.environ.get("RENIEC_TOKEN_DECOLECTA")
     token_apisperu = os.environ.get("RENIEC_TOKEN_APISPERU")
 
-    # 1. Intentar con Decolecta
+    # 1. Intentar consulta con Decolecta
     if token_decolecta:
         try:
             url = f"https://api.decolecta.com/v1/reniec/dni?numero={dni}"
@@ -175,7 +198,7 @@ def consultar_reniec(dni):
         except Exception as e:
             print(f"[RENIEC Decolecta Error]: {e}")
 
-    # 2. Intentar con ApisPerú
+    # 2. Intentar consulta con ApisPerú
     if token_apisperu:
         try:
             url = f"https://dniruc.apisperu.com/api/v1/dni/{dni}?token={token_apisperu}"
@@ -192,14 +215,14 @@ def consultar_reniec(dni):
         except Exception as e:
             print(f"[RENIEC ApisPerú Error]: {e}")
 
-    return jsonify({"success": False, "message": "No se encontraron datos para el DNI especificado."}), 404
+    return jsonify({"success": False, "message": "No se encontraron datos para el DNI."}), 404
 
 # ==========================================
-# RUTAS DE PACIENTES
+# ENDPOINTS Y RUTAS DE PACIENTES
 # ==========================================
 @app.route('/pacientes')
 def vista_pacientes():
-    return render_template('pacientes.html')
+    return safe_render_template('pacientes.html')
 
 @app.route('/api/pacientes', methods=['GET'])
 def listar_pacientes():
@@ -234,14 +257,14 @@ def guardar_paciente():
     if exito:
         return jsonify({"success": True, "message": "Paciente registrado con éxito."})
     else:
-        return jsonify({"success": False, "message": "Error al guardar el paciente en la base de datos (posible DNI duplicado)."}), 500
+        return jsonify({"success": False, "message": "Error al guardar el paciente (posible DNI duplicado)."}), 500
 
 # ==========================================
-# RUTAS DE PERSONAL MÉDICO
+# ENDPOINTS Y RUTAS DE PERSONAL MÉDICO
 # ==========================================
 @app.route('/personal_medico')
 def vista_personal_medico():
-    return render_template('personal_medico.html')
+    return safe_render_template('personal_medico.html')
 
 @app.route('/api/personal_medico', methods=['GET'])
 def listar_personal_medico():
@@ -276,43 +299,54 @@ def guardar_personal_medico():
         return jsonify({"success": False, "message": "Error al guardar personal médico."}), 500
 
 # ==========================================
-# RUTAS SECUNDARIAS / VISTAS DEL SISTEMA
+# RUTAS DE INTERFAZ DEL SISTEMA
 # ==========================================
 @app.route('/')
 @app.route('/dashboard')
 def dashboard():
-    return render_template('dashboard.html')
+    return safe_render_template('dashboard.html')
 
 @app.route('/citas')
 def citas():
-    return render_template('citas.html')
+    return safe_render_template('citas.html')
 
 @app.route('/triaje')
 def triaje():
-    return render_template('triaje.html')
+    return safe_render_template('triaje.html')
 
 @app.route('/historial')
 def historial():
-    return render_template('historial.html')
+    return safe_render_template('historial.html')
 
 @app.route('/facturacion')
 def facturacion():
-    return render_template('facturacion.html')
+    return safe_render_template('facturacion.html')
 
 @app.route('/farmacia')
 def farmacia():
-    return render_template('farmacia.html')
+    return safe_render_template('farmacia.html')
 
 @app.route('/laboratorio')
 def laboratorio():
-    return render_template('laboratorio.html')
+    return safe_render_template('laboratorio.html')
 
 @app.route('/hospitalizacion')
 def hospitalizacion():
-    return render_template('hospitalizacion.html')
+    return safe_render_template('hospitalizacion.html')
 
 # ==========================================
-# EJECUCIÓN DEL SERVIDOR
+# CONTROLADORES DE ERRORES HTTP
+# ==========================================
+@app.errorhandler(500)
+def server_error(e):
+    return f"<h2>Error Interno del Servidor (500)</h2><p>{str(e)}</p>", 500
+
+@app.errorhandler(404)
+def not_found(e):
+    return "<h2>Página no encontrada (404)</h2><p>La ruta especificada no existe.</p>", 404
+
+# ==========================================
+# INICIO DEL SERVIDOR
 # ==========================================
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
