@@ -1,0 +1,24 @@
+{
+  "accuracy": 0.685,
+  "precision": 0.4861,
+  "recall": 0.5738,
+  "f1_score": 0.5263,
+  "n_entrenamiento": 1600,
+  "n_prueba": 400,
+  "features": [
+    "edad",
+    "presion_sistolica",
+    "presion_diastolica",
+    "frecuencia_cardiaca",
+    "glucosa",
+    "temperatura",
+    "nivel_triaje",
+    "comorbilidades"
+  ],
+  "matriz_confusion": {
+    "tn": 204,
+    "fp": 74,
+    "fn": 52,
+    "tp": 70
+  }
+}

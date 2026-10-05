@@ -1,0 +1,20 @@
+# Variables de entorno y llaves secretas (¡LO MÁS IMPORTANTE!)
+.env
+.env.*
+!.env.example
+
+# Entornos virtuales de Python
+.venv/
+venv/
+env/
+
+# Caché y archivos temporales de Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Configuración del editor y sistema operativo
+.vscode/
+.DS_Store
+Thumbs.db

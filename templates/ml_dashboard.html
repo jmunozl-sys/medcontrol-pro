@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedControl Pro - Inteligencia Artificial / Riesgo de Reingreso</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" rel="stylesheet">
+
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; }
+        .sidebar { min-height: 100vh; background-color: #1e293b; color: #fff; }
+        .sidebar .nav-link { color: #94a3b8; padding: 12px 20px; font-weight: 500; border-radius: 6px; margin: 2px 10px; cursor: pointer; text-decoration: none; display: block; }
+        .sidebar .nav-link:hover, .sidebar .nav-link.active { background-color: #0f172a; color: #38bdf8; }
+        .sidebar .brand { font-size: 1.4rem; font-weight: bold; color: #38bdf8; padding: 20px; text-align: center; }
+        .content-header { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 15px 30px; }
+        .card-dash { border: none; border-radius: 10px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .metric-card h2 { font-weight: 700; }
+        .progress { height: 28px; border-radius: 14px; }
+        .progress-bar { font-weight: 600; font-size: .95rem; }
+
+        /* Indicador EN VIVO */
+        .live-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #dc3545; margin-right: 6px; animation: pulso 1.4s infinite; }
+        .live-dot.off { background: #94a3b8; animation: none; }
+        @keyframes pulso { 0% { box-shadow: 0 0 0 0 rgba(220,53,69,.6); } 70% { box-shadow: 0 0 0 8px rgba(220,53,69,0); } 100% { box-shadow: 0 0 0 0 rgba(220,53,69,0); } }
+
+        /* Matriz de confusión (HTML, datos reales) */
+        .cm { width: 100%; max-width: 480px; margin: 0 auto; border-collapse: separate; border-spacing: 6px; text-align: center; }
+        .cm th { font-weight: 600; color: #475569; font-size: .85rem; padding: 4px; }
+        .cm td.celda { border-radius: 10px; padding: 20px 6px; color: #fff; transition: background .3s; }
+        .cm td.celda .n { font-size: 2rem; font-weight: 700; line-height: 1; }
+        .cm td.celda .p { font-size: .8rem; opacity: .95; }
+        .cm td.celda .l { font-size: .72rem; opacity: .85; }
+        .celda.tn, .celda.tp { background: #198754; }
+        .celda.fp, .celda.fn { background: #dc3545; }
+        .cm.vacio td.celda { background: #cbd5e1; }
+        .flash { animation: destello .7s; }
+        @keyframes destello { 0% { transform: scale(1.08); filter: brightness(1.3); } 100% { transform: scale(1); filter: none; } }
+        .tabla-pred td, .tabla-pred th { font-size: .85rem; vertical-align: middle; }
+        .nota-fuente { font-size: .8rem; }
+    </style>
+</head>
+<body>
+
+<div class="container-fluid">
+    <div class="row">
+        <!-- SIDEBAR -->
+        <nav class="col-md-3 col-lg-2 sidebar d-md-block p-0">
+            <div class="brand"><i class="bi bi-hospital"></i> MedControl</div>
+            <ul class="nav flex-column mt-3">
+                <li class="nav-item"><a class="nav-link" href="/"><i class="bi bi-speedometer2 me-2"></i> Dashboard Principal</a></li>
+                <li class="nav-item"><a class="nav-link active" href="/ml/dashboard"><i class="bi bi-cpu me-2"></i> IA - Riesgo de Reingreso</a></li>
+                <li class="nav-item"><a class="nav-link" href="/gpt/asistente"><i class="bi bi-robot me-2"></i> Asistente Clínico GPT</a></li>
+            </ul>
+        </nav>
+
+        <!-- CONTENIDO -->
+        <main class="col-md-9 ms-sm-auto col-lg-10 px-0">
+            <div class="content-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <h4 class="m-0 fw-bold">Inteligencia Artificial — Riesgo de Reingreso</h4>
+                <div class="d-flex gap-2">
+                    <a href="/ml/exportar-predicciones" class="btn btn-outline-secondary btn-sm"><i class="bi bi-file-earmark-spreadsheet"></i> Exportar predicciones</a>
+                    <a href="/ml/exportar-csv" class="btn btn-outline-primary btn-sm"><i class="bi bi-download"></i> Descargar Dataset (2,000 registros)</a>
+                </div>
+            </div>
+
+            <div class="p-4">
+                {% if not modelo_disponible %}
+                <div class="alert alert-warning">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    Aún no se ha entrenado el modelo. Ejecuta en la terminal:
+                    <code>python generar_dataset.py</code> y luego <code>python entrenar_modelo.py</code>.
+                </div>
+                {% else %}
+
+                <div id="aviso-global"></div>
+
+                <!-- BARRA DE FUENTE / ESTADO EN VIVO -->
+                <div class="card card-dash p-3 mb-3">
+                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                        <div class="btn-group" role="group" aria-label="Fuente de datos">
+                            <input type="radio" class="btn-check" name="fuente" id="fuente-vivo" value="vivo" autocomplete="off" checked>
+                            <label class="btn btn-outline-primary btn-sm" for="fuente-vivo"><i class="bi bi-broadcast"></i> En vivo (resultados confirmados)</label>
+                            <input type="radio" class="btn-check" name="fuente" id="fuente-validacion" value="validacion" autocomplete="off">
+                            <label class="btn btn-outline-primary btn-sm" for="fuente-validacion"><i class="bi bi-mortarboard"></i> Validación del entrenamiento</label>
+                        </div>
+                        <div class="d-flex align-items-center gap-2" id="filtro-origen-box">
+                            <label class="small text-muted mb-0" for="filtro-origen">Origen:</label>
+                            <select id="filtro-origen" class="form-select form-select-sm" style="width:auto">
+                                <option value="todos">Todos</option>
+                                <option value="sistema">Sistema (pacientes reales)</option>
+                                <option value="simulacion">Simulación</option>
+                            </select>
+                        </div>
+                        <div class="small text-muted"><span class="live-dot" id="live-dot"></span><span id="estado-live">Conectando…</span></div>
+                    </div>
+                </div>
+
+                <!-- MÉTRICAS -->
+                <div class="row g-3 mb-4">
+                    <div class="col-md-3 col-6"><div class="card card-dash bg-primary text-white p-3 metric-card"><h6>Accuracy</h6><h2 id="m-accuracy">—</h2></div></div>
+                    <div class="col-md-3 col-6"><div class="card card-dash bg-success text-white p-3 metric-card"><h6>Precision</h6><h2 id="m-precision">—</h2></div></div>
+                    <div class="col-md-3 col-6"><div class="card card-dash bg-warning text-dark p-3 metric-card"><h6>Recall</h6><h2 id="m-recall">—</h2></div></div>
+                    <div class="col-md-3 col-6"><div class="card card-dash bg-info text-white p-3 metric-card"><h6>F1-Score</h6><h2 id="m-f1">—</h2></div></div>
+                </div>
+
+                <div class="row g-4 mb-4">
+                    <!-- MATRIZ DE CONFUSIÓN EN VIVO -->
+                    <div class="col-lg-6">
+                        <div class="card card-dash p-3 h-100">
+                            <h5 class="fw-bold mb-1"><i class="bi bi-grid-3x3"></i> Matriz de Confusión <span class="badge bg-secondary fw-normal" id="badge-fuente">—</span></h5>
+                            <p class="text-muted nota-fuente mb-3" id="detalle-matriz">Cargando…</p>
+                            <table class="cm vacio" id="cm">
+                                <tr><th></th><th colspan="2">PREDICCIÓN</th></tr>
+                                <tr><th></th><th>Bajo riesgo</th><th>Alto riesgo</th></tr>
+                                <tr>
+                                    <th class="text-end">REAL<br>Bajo riesgo</th>
+                                    <td class="celda tn"><div class="n" id="c-tn">0</div><div class="p" id="p-tn"></div><div class="l">TN · verdadero negativo</div></td>
+                                    <td class="celda fp"><div class="n" id="c-fp">0</div><div class="p" id="p-fp"></div><div class="l">FP · falso positivo</div></td>
+                                </tr>
+                                <tr>
+                                    <th class="text-end">REAL<br>Alto riesgo</th>
+                                    <td class="celda fn"><div class="n" id="c-fn">0</div><div class="p" id="p-fn"></div><div class="l">FN · falso negativo</div></td>
+                                    <td class="celda tp"><div class="n" id="c-tp">0</div><div class="p" id="p-tp"></div><div class="l">TP · verdadero positivo</div></td>
+                                </tr>
+                            </table>
+                            <p class="text-muted small mt-3 mb-0">
+                                El porcentaje de cada celda es respecto al total de la fila real.
+                                <strong>Real</strong> = lo que ocurrió; <strong>Predicción</strong> = lo que estimó el modelo.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- FORMULARIO DE PREDICCIÓN -->
+                    <div class="col-lg-6">
+                        <div class="card card-dash p-3 h-100">
+                            <h5 class="fw-bold mb-3"><i class="bi bi-activity"></i> Predicción de Riesgo en Vivo</h5>
+                            <form id="form-predict" novalidate>
+                                <div class="mb-2">
+                                    <label class="form-label small text-muted mb-1">Paciente del sistema (autocompleta con triaje, laboratorio e historial)</label>
+                                    <select class="form-select" id="paciente_id">
+                                        <option value="">— Ingresar datos manualmente —</option>
+                                    </select>
+                                    <div id="info-paciente" class="form-text"></div>
+                                </div>
+                                <div class="row g-2 mb-2">
+                                    <div class="col-6">
+                                        <label class="form-label small text-muted mb-1">Edad</label>
+                                        <input type="number" class="form-control" id="edad" value="55" min="0" max="120" required>
+                                    </div>
+                                    <div class="col-6">
+                                        <label class="form-label small text-muted mb-1">Nivel de Triaje (1=Emergencia, 5=No urgente)</label>
+                                        <select class="form-select" id="nivel_triaje" required>
+                                            <option value="1">1 - Emergencia</option>
+                                            <option value="2">2 - Muy urgente</option>
+                                            <option value="3" selected>3 - Urgente</option>
+                                            <option value="4">4 - Poco urgente</option>
+                                            <option value="5">5 - No urgente</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="row g-2 mb-2">
+                                    <div class="col-6"><label class="form-label small text-muted mb-1">Presión Sistólica (mmHg)</label><input type="number" class="form-control" id="presion_sistolica" value="125" required></div>
+                                    <div class="col-6"><label class="form-label small text-muted mb-1">Presión Diastólica (mmHg)</label><input type="number" class="form-control" id="presion_diastolica" value="80" required></div>
+                                </div>
+                                <div class="row g-2 mb-2">
+                                    <div class="col-6"><label class="form-label small text-muted mb-1">Frecuencia Cardíaca (lpm)</label><input type="number" class="form-control" id="frecuencia_cardiaca" value="80" required></div>
+                                    <div class="col-6"><label class="form-label small text-muted mb-1">Glucosa (mg/dL)</label><input type="number" class="form-control" id="glucosa" value="100" required></div>
+                                </div>
+                                <div class="row g-2 mb-3">
+                                    <div class="col-6"><label class="form-label small text-muted mb-1">Temperatura (°C)</label><input type="number" step="0.1" class="form-control" id="temperatura" value="36.7" required></div>
+                                    <div class="col-6"><label class="form-label small text-muted mb-1">N° de Comorbilidades</label><input type="number" class="form-control" id="comorbilidades" value="0" min="0" max="10" required></div>
+                                </div>
+                                <button type="submit" class="btn btn-primary w-100" id="btn-predecir"><i class="bi bi-lightning-charge"></i> Calcular Riesgo</button>
+                            </form>
+
+                            <div id="resultado-predict" class="mt-3 d-none">
+                                <label class="form-label fw-bold" id="resultado-etiqueta">—</label>
+                                <div class="progress"><div id="barra-probabilidad" class="progress-bar" role="progressbar" style="width: 0%;">0%</div></div>
+                                <div id="confirmar-box" class="mt-3 d-none">
+                                    <div class="small text-muted mb-1" id="guardado-info"></div>
+                                    <div class="small mb-1">¿Qué ocurrió realmente? (alimenta la matriz en vivo)</div>
+                                    <div class="btn-group btn-group-sm">
+                                        <button type="button" class="btn btn-outline-danger" id="btn-real-1"><i class="bi bi-arrow-repeat"></i> Reingresó</button>
+                                        <button type="button" class="btn btn-outline-success" id="btn-real-0"><i class="bi bi-check2"></i> No reingresó</button>
+                                    </div>
+                                </div>
+                                <p class="small text-muted mt-3 mb-0">Estimación mediante Machine Learning como apoyo a la toma de decisiones. No sustituye la evaluación de un profesional de salud.</p>
+                            </div>
+                            <div id="error-predict" class="alert alert-danger mt-3 d-none"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row g-4">
+                    <!-- SIMULACIÓN -->
+                    <div class="col-lg-4">
+                        <div class="card card-dash p-3 h-100">
+                            <h5 class="fw-bold mb-2"><i class="bi bi-lightning"></i> Modo demostración</h5>
+                            <p class="small text-muted">Genera pacientes <strong>simulados</strong> nuevos (que el modelo no vio al entrenar), los predice y registra su resultado simulado. Sirve para ver la matriz moverse en tiempo real. Quedan marcados como <em>simulación</em> y no se mezclan con pacientes reales si filtras por origen.</p>
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" id="sw-sim">
+                                <label class="form-check-label" for="sw-sim">Simulación continua (1 paciente cada 2 s)</label>
+                            </div>
+                            <div class="d-grid gap-2">
+                                <button class="btn btn-outline-primary btn-sm" id="btn-sim-50"><i class="bi bi-people"></i> Simular 50 pacientes</button>
+                                <button class="btn btn-outline-danger btn-sm" id="btn-sim-reset"><i class="bi bi-trash"></i> Borrar solo la simulación</button>
+                            </div>
+                            <hr>
+                            <div class="small text-muted" id="resumen-conteo">—</div>
+                        </div>
+                    </div>
+
+                    <!-- ÚLTIMAS PREDICCIONES -->
+                    <div class="col-lg-8">
+                        <div class="card card-dash p-3 h-100">
+                            <h5 class="fw-bold mb-3"><i class="bi bi-list-check"></i> Últimas predicciones</h5>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-hover align-middle tabla-pred mb-0" id="tabla-pred">
+                                    <thead class="table-light">
+                                        <tr><th>#</th><th>Fecha</th><th>Paciente</th><th>Edad</th><th>Prob.</th><th>Predicción</th><th>Real</th><th>Estado</th></tr>
+                                    </thead>
+                                    <tbody><tr><td colspan="8" class="text-muted text-center">Cargando…</td></tr></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+{% if modelo_disponible %}<script src="{{ url_for('static', filename='js/ml_dashboard.js') }}"></script>{% endif %}
+</body>
+</html>

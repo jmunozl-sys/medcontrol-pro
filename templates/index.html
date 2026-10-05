@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedControl Pro - Sistema de Gestión Hospitalaria</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" rel="stylesheet">
+    <!-- Leaflet (mapa OpenStreetMap, gratuito, sin API key) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; }
+        .sidebar { min-height: 100vh; background-color: #1e293b; color: #fff; }
+        .sidebar .nav-link { color: #94a3b8; padding: 12px 20px; font-weight: 500; border-radius: 6px; margin: 2px 10px; cursor: pointer; }
+        .sidebar .nav-link:hover, .sidebar .nav-link.active { background-color: #0f172a; color: #38bdf8; }
+        .sidebar .brand { font-size: 1.4rem; font-weight: bold; color: #38bdf8; padding: 20px; text-align: center; }
+        .content-header { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 15px 30px; }
+        .card-dash { border: none; border-radius: 10px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .table-responsive { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        #mapa-dashboard { height: 380px; border-radius: 10px; z-index: 0; }
+        .autocomplete-box { position: relative; }
+        .autocomplete-list { position: absolute; z-index: 2000; background: #fff; border: 1px solid #ddd; width: 100%; max-height: 200px; overflow-y: auto; border-radius: 0 0 6px 6px; box-shadow: 0 4px 8px rgba(0,0,0,.1); }
+        .autocomplete-list div { padding: 8px 12px; cursor: pointer; font-size: .9rem; }
+        .autocomplete-list div:hover { background: #f1f5f9; }
+    </style>
+</head>
+<body>
+
+<div class="container-fluid">
+    <div class="row">
+        <!-- SIDEBAR -->
+        <nav class="col-md-3 col-lg-2 sidebar d-md-block p-0">
+            <div class="brand"><i class="bi bi-hospital"></i> MedControl</div>
+            <ul class="nav flex-column mt-3" id="menu-items">
+                <li class="nav-item"><a class="nav-link active" data-sec="dashboard"><i class="bi bi-speedometer2 me-2"></i> Dashboard</a></li>
+                <li class="nav-item"><a class="nav-link" data-sec="pacientes"><i class="bi bi-people me-2"></i> Pacientes</a></li>
+                <li class="nav-item"><a class="nav-link" data-sec="medicos"><i class="bi bi-person-badge me-2"></i> Personal Médico</a></li>
+                <li class="nav-item"><a class="nav-link" data-sec="citas"><i class="bi bi-calendar-event me-2"></i> Citas Médicas</a></li>
+                <li class="nav-item"><a class="nav-link" data-sec="triaje"><i class="bi bi-heart-pulse me-2"></i> Triaje</a></li>
+                <li class="nav-item"><a class="nav-link" data-sec="historial"><i class="bi bi-file-earmark-medical me-2"></i> Historial Clínico</a></li>
+                <li class="nav-item"><a class="nav-link" data-sec="facturacion"><i class="bi bi-receipt me-2"></i> Caja y Facturación</a></li>
+                <li class="nav-item"><a class="nav-link" data-sec="farmacia"><i class="bi bi-capsule me-2"></i> Farmacia</a></li>
+                <li class="nav-item"><a class="nav-link" data-sec="laboratorio"><i class="bi bi-droplet me-2"></i> Laboratorio</a></li>
+                <li class="nav-item"><a class="nav-link" data-sec="hospitalizacion"><i class="bi bi-journal-plus me-2"></i> Hospitalización</a></li>
+                <li class="nav-item"><a class="nav-link" data-sec="notificaciones"><i class="bi bi-envelope me-2"></i> Notificaciones</a></li>
+            </ul>
+            <!-- Enlaces a módulos independientes (páginas reales, fuera del router SPA de arriba) -->
+            <ul class="nav flex-column mt-2">
+                <li class="nav-item px-3"><hr class="text-secondary my-1"></li>
+                <li class="nav-item"><a class="nav-link" href="/ml/dashboard"><i class="bi bi-cpu me-2"></i> IA - Riesgo de Reingreso</a></li>
+                <li class="nav-item"><a class="nav-link" href="/gpt/asistente"><i class="bi bi-robot me-2"></i> Asistente Clínico GPT</a></li>
+            </ul>
+        </nav>
+
+        <!-- ÁREA DE CONTENIDO -->
+        <main class="col-md-9 ms-sm-auto col-lg-10 px-0">
+            <div class="content-header d-flex justify-content-between align-items-center">
+                <h4 class="m-0 fw-bold" id="title-modulo">Dashboard</h4>
+                <div class="badge bg-primary fs-6 p-2"><i class="bi bi-person-circle"></i> Administrador</div>
+            </div>
+
+            <div class="p-4">
+                <!-- 1. DASHBOARD -->
+                <div id="sec-dashboard" class="modulo-sec">
+                    <div class="row g-4 mb-4">
+                        <div class="col-md-3">
+                            <div class="card card-dash bg-primary text-white p-3">
+                                <h6>Total Pacientes</h6><h2 id="dash-pacientes">0</h2>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card card-dash bg-success text-white p-3">
+                                <h6>Citas Registradas</h6><h2 id="dash-citas">0</h2>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card card-dash bg-warning text-dark p-3">
+                                <h6>Personal Médico</h6><h2 id="dash-medicos">0</h2>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card card-dash bg-info text-white p-3">
+                                <h6>Ingresos Hoy (S/)</h6><h2 id="dash-ingresos">0.00</h2>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card card-dash p-3">
+                        <h5 class="fw-bold mb-2"><i class="bi bi-geo-alt"></i> Ubicación de pacientes registrados</h5>
+                        <p class="text-muted small mb-2">Mapa generado con OpenStreetMap + Leaflet (gratuito). Los pacientes con dirección geolocalizada aparecen como marcadores.</p>
+                        <div id="mapa-dashboard"></div>
+                    </div>
+                </div>
+
+                <!-- 2. PACIENTES -->
+                <div id="sec-pacientes" class="modulo-sec d-none">
+                    <div class="table-responsive">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold mb-0">Listado de Pacientes</h5>
+                            <button class="btn btn-primary btn-sm" onclick="abrirModalPaciente()"><i class="bi bi-plus-lg"></i> Nuevo Paciente</button>
+                        </div>
+                        <table class="table table-hover align-middle" id="tabla-pacientes">
+                            <thead class="table-light">
+                                <tr><th>ID</th><th>Paciente</th><th>DNI</th><th>Teléfono</th><th>Email</th><th class="text-center">Acciones</th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 3. PERSONAL MÉDICO -->
+                <div id="sec-medicos" class="modulo-sec d-none">
+                    <div class="table-responsive">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold mb-0">Personal Médico</h5>
+                            <button class="btn btn-primary btn-sm" onclick="abrirModalMedico()"><i class="bi bi-plus-lg"></i> Nuevo Médico</button>
+                        </div>
+                        <table class="table table-hover align-middle" id="tabla-medicos">
+                            <thead class="table-light">
+                                <tr><th>ID</th><th>Médico</th><th>CMP</th><th>Especialidad</th><th>Teléfono</th><th class="text-center">Acciones</th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 4. CITAS MÉDICAS -->
+                <div id="sec-citas" class="modulo-sec d-none">
+                    <div class="table-responsive">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold mb-0">Gestión de Citas</h5>
+                            <button class="btn btn-primary btn-sm" onclick="abrirModalCita()"><i class="bi bi-plus-lg"></i> Nueva Cita</button>
+                        </div>
+                        <table class="table table-hover align-middle" id="tabla-citas">
+                            <thead class="table-light">
+                                <tr><th>ID</th><th>Paciente</th><th>Médico</th><th>Fecha/Hora</th><th>Motivo</th><th>Estado</th><th class="text-center">Acciones</th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 5. TRIAJE -->
+                <div id="sec-triaje" class="modulo-sec d-none">
+                    <div class="table-responsive">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold mb-0">Registros de Triaje</h5>
+                            <button class="btn btn-primary btn-sm" onclick="abrirModalTriaje()"><i class="bi bi-plus-lg"></i> Nuevo Triaje</button>
+                        </div>
+                        <table class="table table-hover align-middle" id="tabla-triaje">
+                            <thead class="table-light">
+                                <tr><th>ID</th><th>Paciente</th><th>P. Arterial</th><th>Temp.</th><th>Sat. O2</th><th>IMC</th><th class="text-center">Acciones</th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 6. HISTORIAL CLÍNICO -->
+                <div id="sec-historial" class="modulo-sec d-none">
+                    <div class="table-responsive">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold mb-0">Historiales Clínicos</h5>
+                            <button class="btn btn-primary btn-sm" onclick="abrirModalHistorial()"><i class="bi bi-plus-lg"></i> Registrar Consulta</button>
+                        </div>
+                        <table class="table table-hover align-middle" id="tabla-historial">
+                            <thead class="table-light">
+                                <tr><th>ID</th><th>Paciente</th><th>Médico</th><th>Diagnóstico</th><th>CIE-10</th><th class="text-center">Acciones</th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 7. CAJA Y FACTURACIÓN -->
+                <div id="sec-facturacion" class="modulo-sec d-none">
+                    <div class="table-responsive">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold mb-0">Comprobantes de Pago</h5>
+                            <button class="btn btn-primary btn-sm" onclick="abrirModalFacturacion()"><i class="bi bi-plus-lg"></i> Nuevo Comprobante</button>
+                        </div>
+                        <table class="table table-hover align-middle" id="tabla-facturacion">
+                            <thead class="table-light">
+                                <tr><th>ID</th><th>Paciente</th><th>Documento</th><th>Monto</th><th>Método</th><th>Estado</th><th>Fecha</th><th class="text-center">Acciones</th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 8. FARMACIA -->
+                <div id="sec-farmacia" class="modulo-sec d-none">
+                    <div class="table-responsive">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold mb-0">Inventario de Farmacia</h5>
+                            <button class="btn btn-primary btn-sm" onclick="abrirModalFarmacia()"><i class="bi bi-plus-lg"></i> Nuevo Medicamento</button>
+                        </div>
+                        <table class="table table-hover align-middle" id="tabla-farmacia">
+                            <thead class="table-light">
+                                <tr><th>ID</th><th>Código</th><th>Producto</th><th>Presentación</th><th>Stock</th><th>Precio</th><th class="text-center">Acciones</th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 9. LABORATORIO -->
+                <div id="sec-laboratorio" class="modulo-sec d-none">
+                    <div class="table-responsive">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold mb-0">Órdenes de Laboratorio</h5>
+                            <button class="btn btn-primary btn-sm" onclick="abrirModalLaboratorio()"><i class="bi bi-plus-lg"></i> Nueva Orden</button>
+                        </div>
+                        <table class="table table-hover align-middle" id="tabla-laboratorio">
+                            <thead class="table-light">
+                                <tr><th>ID</th><th>Paciente</th><th>Examen</th><th>Estado</th><th>Resultado</th><th class="text-center">Acciones</th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 10. HOSPITALIZACIÓN -->
+                <div id="sec-hospitalizacion" class="modulo-sec d-none">
+                    <div class="table-responsive">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold mb-0">Pacientes Hospitalizados</h5>
+                            <button class="btn btn-primary btn-sm" onclick="abrirModalHospitalizacion()"><i class="bi bi-plus-lg"></i> Asignar Cama</button>
+                        </div>
+                        <table class="table table-hover align-middle" id="tabla-hospitalizacion">
+                            <thead class="table-light">
+                                <tr><th>ID</th><th>Paciente</th><th>Cama</th><th>Médico Responsable</th><th>Estado</th><th class="text-center">Acciones</th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 11. NOTIFICACIONES -->
+                <div id="sec-notificaciones" class="modulo-sec d-none">
+                    <div class="table-responsive">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold mb-0">Registro de Notificaciones</h5>
+                            <button class="btn btn-primary btn-sm" onclick="abrirModalNotificacion()"><i class="bi bi-plus-lg"></i> Enviar Notificación</button>
+                        </div>
+                        <table class="table table-hover align-middle" id="tabla-notificaciones">
+                            <thead class="table-light">
+                                <tr><th>ID</th><th>Destinatario</th><th>Asunto</th><th>Mensaje</th><th>Fecha</th><th class="text-center">Acciones</th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<!-- MODALES -->
+<div class="modal fade" id="modalPaciente" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">Gestión de Paciente</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <form id="form-paciente">
+                <div class="modal-body">
+                    <input type="hidden" id="p-id">
+                    <div class="input-group mb-3">
+                        <input type="text" id="p-dni" class="form-control" placeholder="DNI" maxlength="8" required>
+                        <button class="btn btn-outline-secondary" type="button" onclick="buscarDniReniec()"><i class="bi bi-search"></i> RENIEC</button>
+                    </div>
+                    <div class="mb-3"><input type="text" id="p-nombre" class="form-control" placeholder="Nombres" required></div>
+                    <div class="mb-3"><input type="text" id="p-apellido" class="form-control" placeholder="Apellidos" required></div>
+                    <div class="row g-2 mb-3">
+                        <div class="col"><label class="form-label text-muted small mb-1">Fecha Nacimiento</label><input type="date" id="p-fnac" class="form-control"></div>
+                        <div class="col">
+                            <label class="form-label text-muted small mb-1">Género</label>
+                            <select id="p-genero" class="form-select">
+                                <option value="Masculino">Masculino</option>
+                                <option value="Femenino">Femenino</option>
+                                <option value="Otro">Otro</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="mb-3"><input type="text" id="p-tel" class="form-control" placeholder="Teléfono"></div>
+                    <div class="mb-3"><input type="email" id="p-email" class="form-control" placeholder="Correo Electrónico"></div>
+                    <div class="mb-3 autocomplete-box">
+                        <input type="text" id="p-direccion" class="form-control" placeholder="Dirección (para ubicar en el mapa)" autocomplete="off">
+                        <div id="p-direccion-list" class="autocomplete-list d-none"></div>
+                        <input type="hidden" id="p-lat"><input type="hidden" id="p-lng">
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col"><input type="text" id="p-grupo" class="form-control" placeholder="Grupo Sanguíneo (ej. O+)"></div>
+                    </div>
+                    <div class="mb-3"><textarea id="p-alergias" class="form-control" placeholder="Alergias conocidas" rows="2"></textarea></div>
+                </div>
+                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button><button type="submit" class="btn btn-primary">Guardar</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="modalMedico" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">Gestión de Médico</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <form id="form-medico">
+                <div class="modal-body">
+                    <input type="hidden" id="m-id">
+                    <div class="input-group mb-3">
+                        <input type="text" id="m-dni" class="form-control" placeholder="DNI" maxlength="8" required>
+                        <button class="btn btn-outline-secondary" type="button" onclick="buscarDniReniecMedico()"><i class="bi bi-search"></i> RENIEC</button>
+                    </div>
+                    <div class="mb-3"><input type="text" id="m-nombre" class="form-control" placeholder="Nombres" required></div>
+                    <div class="mb-3"><input type="text" id="m-apellido" class="form-control" placeholder="Apellidos" required></div>
+                    <div class="mb-3"><input type="text" id="m-cmp" class="form-control" placeholder="Colegiatura CMP" required></div>
+                    <div class="mb-3">
+                        <select id="m-especialidad" class="form-select" required>
+                            <option value="">Seleccione Especialidad</option>
+                        </select>
+                    </div>
+                    <div class="mb-3"><input type="text" id="m-tel" class="form-control" placeholder="Teléfono"></div>
+                    <div class="mb-3"><input type="email" id="m-email" class="form-control" placeholder="Correo Electrónico"></div>
+                </div>
+                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button><button type="submit" class="btn btn-primary">Guardar</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="modalCita" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">Gestión de Cita</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <form id="form-cita">
+                <div class="modal-body">
+                    <input type="hidden" id="c-id">
+                    <div class="mb-3"><select id="c-paciente" class="form-select" required><option value="">Seleccione Paciente</option></select></div>
+                    <div class="mb-3"><select id="c-medico" class="form-select" required><option value="">Seleccione Médico</option></select></div>
+                    <div class="mb-3"><input type="date" id="c-fecha" class="form-control" required></div>
+                    <div class="mb-3"><input type="time" id="c-hora" class="form-control" required></div>
+                    <div class="mb-3">
+                        <select id="c-estado" class="form-select">
+                            <option value="Programada">Programada</option>
+                            <option value="En Triaje">En Triaje</option>
+                            <option value="Atendido">Atendido</option>
+                            <option value="Completada">Completada</option>
+                            <option value="Cancelada">Cancelada</option>
+                        </select>
+                    </div>
+                    <div class="mb-3"><textarea id="c-motivo" class="form-control" placeholder="Motivo de la consulta" rows="2"></textarea></div>
+                </div>
+                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button><button type="submit" class="btn btn-primary">Guardar</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="modalTriaje" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">Gestión de Triaje</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <form id="form-triaje">
+                <div class="modal-body">
+                    <input type="hidden" id="t-id">
+                    <div class="mb-3"><select id="t-cita" class="form-select" required><option value="">Seleccione Cita / Paciente</option></select></div>
+                    <div class="mb-3"><input type="text" id="t-presion" class="form-control" placeholder="Presión Arterial (ej. 120/80)" required></div>
+                    <div class="row g-2 mb-3">
+                        <div class="col"><input type="number" step="0.1" id="t-temp" class="form-control" placeholder="Temp (°C)" required></div>
+                        <div class="col"><input type="number" id="t-fc" class="form-control" placeholder="Frec. Cardíaca" required></div>
+                        <div class="col"><input type="number" id="t-so2" class="form-control" placeholder="Sat. O2 (%)" required></div>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col"><input type="number" step="0.1" id="t-peso" class="form-control" placeholder="Peso (kg)" required></div>
+                        <div class="col"><input type="number" step="0.1" id="t-talla" class="form-control" placeholder="Talla (cm)" required></div>
+                    </div>
+                </div>
+                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button><button type="submit" class="btn btn-primary">Guardar</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="modalHistorial" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">Gestión de Historial Clínico</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <form id="form-historial">
+                <div class="modal-body">
+                    <input type="hidden" id="h-id">
+                    <div class="mb-3"><select id="h-cita" class="form-select" required><option value="">Seleccione Cita Correspondiente</option></select></div>
+                    <div class="mb-3"><textarea id="h-sintomas" class="form-control" placeholder="Síntomas / Anamnesis" rows="2" required></textarea></div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-8"><input type="text" id="h-diagnostico" class="form-control" placeholder="Diagnóstico Presuntivo" required></div>
+                        <div class="col-4 autocomplete-box">
+                            <input type="text" id="h-cie10" class="form-control" placeholder="Código CIE-10" autocomplete="off">
+                            <div id="h-cie10-list" class="autocomplete-list d-none"></div>
+                        </div>
+                    </div>
+                    <div class="mb-3"><textarea id="h-tratamiento" class="form-control" placeholder="Tratamiento / Receta Médica" rows="3" required></textarea></div>
+                </div>
+                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button><button type="submit" class="btn btn-primary">Guardar</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="modalFacturacion" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">Gestión de Comprobante</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <form id="form-facturacion">
+                <div class="modal-body">
+                    <input type="hidden" id="f-id">
+                    <div class="mb-3"><select id="f-paciente" class="form-select" required><option value="">Seleccione Paciente</option></select></div>
+                    <div class="row g-2 mb-3">
+                        <div class="col"><select id="f-tipo" class="form-select"><option value="Boleta">Boleta</option><option value="Factura">Factura</option></select></div>
+                        <div class="col"><input type="text" id="f-serie" class="form-control" value="B001" required></div>
+                        <div class="col"><input type="text" id="f-correlativo" class="form-control" placeholder="000001" required></div>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col"><input type="number" step="0.01" id="f-monto" class="form-control" placeholder="Monto Total (S/, IGV incluido)" required></div>
+                        <div class="col">
+                            <select id="f-metodo" class="form-select">
+                                <option value="Efectivo">Efectivo</option>
+                                <option value="Yape/Plin">Yape/Plin</option>
+                                <option value="Tarjeta">Tarjeta</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button><button type="submit" class="btn btn-primary">Guardar</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="modalFarmacia" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">Gestión de Producto</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <form id="form-farmacia">
+                <div class="modal-body">
+                    <input type="hidden" id="far-id">
+                    <div class="mb-3"><input type="text" id="far-codigo" class="form-control" placeholder="Código de Medicamento" required></div>
+                    <div class="mb-3"><input type="text" id="far-nombre" class="form-control" placeholder="Nombre Comercial / Genérico" required></div>
+                    <div class="row g-2 mb-3">
+                        <div class="col"><input type="text" id="far-tipo" class="form-control" placeholder="Presentación (Jarabe, Tabletas)" required></div>
+                        <div class="col"><input type="number" id="far-stock" class="form-control" placeholder="Stock" required></div>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col"><input type="number" step="0.01" id="far-precio" class="form-control" placeholder="Precio Unitario" required></div>
+                        <div class="col"><input type="date" id="far-vencimiento" class="form-control" required></div>
+                    </div>
+                </div>
+                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button><button type="submit" class="btn btn-primary">Guardar</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="modalLaboratorio" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">Gestión de Examen</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <form id="form-laboratorio">
+                <div class="modal-body">
+                    <input type="hidden" id="lab-id">
+                    <div class="mb-3"><select id="lab-paciente" class="form-select" required><option value="">Seleccione Paciente</option></select></div>
+                    <div class="mb-3"><select id="lab-medico" class="form-select" required><option value="">Seleccione Médico Solicitante</option></select></div>
+                    <div class="mb-3"><input type="text" id="lab-examen" class="form-control" placeholder="Nombre del Examen" required></div>
+                    <div class="mb-3">
+                        <select id="lab-estado" class="form-select">
+                            <option value="Pendiente">Pendiente</option>
+                            <option value="En Proceso">En Proceso</option>
+                            <option value="Completado">Completado</option>
+                        </select>
+                    </div>
+                    <div class="mb-3"><textarea id="lab-resultado" class="form-control" placeholder="Resultado del Examen" rows="2"></textarea></div>
+                </div>
+                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button><button type="submit" class="btn btn-primary">Guardar</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="modalHospitalizacion" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">Gestión de Hospitalización</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <form id="form-hospitalizacion">
+                <div class="modal-body">
+                    <input type="hidden" id="hosp-id">
+                    <div class="mb-3"><select id="hosp-paciente" class="form-select" required><option value="">Seleccione Paciente</option></select></div>
+                    <div class="mb-3"><select id="hosp-medico" class="form-select" required><option value="">Seleccione Médico Responsable</option></select></div>
+                    <div class="mb-3">
+                        <select id="hosp-cama" class="form-select" required><option value="">Seleccione Cama Disponible</option></select>
+                    </div>
+                    <div class="mb-3"><textarea id="hosp-diag" class="form-control" placeholder="Motivo / Diagnóstico de Ingreso" rows="2" required></textarea></div>
+                </div>
+                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button><button type="submit" class="btn btn-primary">Guardar</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="modalNotificacion" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">Enviar Notificación</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <form id="form-notificacion">
+                <div class="modal-body">
+                    <input type="hidden" id="not-id">
+                    <div class="mb-3"><input type="email" id="not-email" class="form-control" placeholder="Correo Destinatario" required></div>
+                    <div class="mb-3"><input type="text" id="not-asunto" class="form-control" placeholder="Asunto" required></div>
+                    <div class="mb-3"><textarea id="not-mensaje" class="form-control" placeholder="Escriba su mensaje aquí..." rows="3" required></textarea></div>
+                </div>
+                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button><button type="submit" class="btn btn-primary">Enviar</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- SCRIPTS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="{{ url_for('static', filename='js/mapa.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
