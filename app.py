@@ -27,7 +27,6 @@ def safe_render_template(template_name, **context):
     if os.path.exists(target_path):
         return render_template(template_name, **context)
     
-    # Busca una plantilla de respaldo si la solicitada no existe
     for fallback in ['index.html', 'pacientes.html']:
         if os.path.exists(os.path.join(templates_dir, fallback)):
             return render_template(fallback, **context)
@@ -38,7 +37,7 @@ def safe_render_template(template_name, **context):
     )
 
 # ==========================================
-# INICIALIZACIÓN DE BASE DE DATOS SQLITE
+# INICIALIZACIÓN Y AUTO-MIGRACIÓN DE BD
 # ==========================================
 def init_sqlite_db():
     conn = sqlite3.connect(SQLITE_DB_PATH)
@@ -61,6 +60,25 @@ def init_sqlite_db():
             fecha_registro DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
+    # Migración automática de columnas para bases de datos existentes
+    cursor.execute("PRAGMA table_info(Pacientes)")
+    existing_cols = [column[1] for column in cursor.fetchall()]
+    required_cols = {
+        "telefono": "TEXT",
+        "email": "TEXT",
+        "direccion": "TEXT",
+        "fecha_nacimiento": "TEXT",
+        "genero": "TEXT",
+        "grupo_sanguineo": "TEXT",
+        "alergias": "TEXT"
+    }
+    for col, col_type in required_cols.items():
+        if col not in existing_cols:
+            try:
+                cursor.execute(f"ALTER TABLE Pacientes ADD COLUMN {col} {col_type}")
+            except Exception as e:
+                print(f"[DB Migration Warning]: {e}")
 
     # Tabla Personal Médico
     cursor.execute('''
@@ -214,7 +232,7 @@ def consultar_reniec(dni=None):
     return jsonify({"success": False, "message": f"No se encontraron datos para el DNI {dni}."}), 404
 
 # ==========================================
-# ENDPOINTS UNIFICADOS DE PACIENTES
+# ENDPOINTS UNIFICADOS DE PACIENTES (UPSERT)
 # ==========================================
 @app.route('/pacientes')
 def vista_pacientes():
@@ -224,32 +242,45 @@ def vista_pacientes():
 @app.route('/api/pacientes/guardar', methods=['POST'])
 def gestionar_pacientes():
     if request.method == 'POST':
-        data = request.json or request.form
+        data = request.json or request.form or {}
         dni = data.get('dni')
         nombres = data.get('nombres')
         apellidos = data.get('apellidos')
         telefono = data.get('telefono', '')
         email = data.get('email', '')
         direccion = data.get('direccion', '')
-        fecha_nac = data.get('fecha_nacimiento', '')
+        fecha_nac = data.get('fecha_nacimiento') or data.get('fecha_nac', '')
         genero = data.get('genero', '')
-        grupo_sangre = data.get('grupo_sanguineo', '')
+        grupo_sangre = data.get('grupo_sanguineo') or data.get('grupo_sangre', '')
         alergias = data.get('alergias', '')
 
         if not dni or not nombres or not apellidos:
             return jsonify({"success": False, "message": "DNI, nombres y apellidos son requeridos."}), 400
 
-        query = '''
-            INSERT INTO Pacientes (dni, nombres, apellidos, telefono, email, direccion, fecha_nacimiento, genero, grupo_sanguineo, alergias)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        '''
-        params = (dni, nombres, apellidos, telefono, email, direccion, fecha_nac, genero, grupo_sangre, alergias)
+        # Verificar si el paciente ya existe para actualizarlo o insertarlo
+        existente = db_query("SELECT id FROM Pacientes WHERE dni = ?", (dni,), fetchone=True)
+
+        if existente:
+            query = '''
+                UPDATE Pacientes 
+                SET nombres=?, apellidos=?, telefono=?, email=?, direccion=?, fecha_nacimiento=?, genero=?, grupo_sanguineo=?, alergias=?
+                WHERE dni=?
+            '''
+            params = (nombres, apellidos, telefono, email, direccion, fecha_nac, genero, grupo_sangre, alergias, dni)
+            msg = "Paciente actualizado correctamente."
+        else:
+            query = '''
+                INSERT INTO Pacientes (dni, nombres, apellidos, telefono, email, direccion, fecha_nacimiento, genero, grupo_sanguineo, alergias)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            '''
+            params = (dni, nombres, apellidos, telefono, email, direccion, fecha_nac, genero, grupo_sangre, alergias)
+            msg = "Paciente registrado con éxito."
         
         exito = db_query(query, params, commit=True)
         if exito:
-            return jsonify({"success": True, "message": "Paciente registrado con éxito."}), 200
+            return jsonify({"success": True, "message": msg}), 200
         else:
-            return jsonify({"success": False, "message": "Error al guardar el paciente (posible DNI duplicado)."}), 500
+            return jsonify({"success": False, "message": "No se pudo guardar la información en la base de datos."}), 500
 
     # Método GET: Listar pacientes
     query = "SELECT id, dni, nombres, apellidos, telefono, email FROM Pacientes ORDER BY id DESC"
@@ -267,7 +298,7 @@ def vista_personal_medico():
 @app.route('/api/personal_medico/guardar', methods=['POST'])
 def gestionar_personal_medico():
     if request.method == 'POST':
-        data = request.json or request.form
+        data = request.json or request.form or {}
         dni = data.get('dni')
         nombres = data.get('nombres')
         apellidos = data.get('apellidos')
@@ -279,17 +310,29 @@ def gestionar_personal_medico():
         if not dni or not nombres or not apellidos:
             return jsonify({"success": False, "message": "DNI, nombres y apellidos son requeridos."}), 400
 
-        query = '''
-            INSERT INTO PersonalMedico (dni, nombres, apellidos, colegiatura, especialidad, telefono, email)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        '''
-        params = (dni, nombres, apellidos, colegiatura, especialidad, telefono, email)
+        existente = db_query("SELECT id FROM PersonalMedico WHERE dni = ?", (dni,), fetchone=True)
+
+        if existente:
+            query = '''
+                UPDATE PersonalMedico
+                SET nombres=?, apellidos=?, colegiatura=?, especialidad=?, telefono=?, email=?
+                WHERE dni=?
+            '''
+            params = (nombres, apellidos, colegiatura, especialidad, telefono, email, dni)
+            msg = "Personal médico actualizado con éxito."
+        else:
+            query = '''
+                INSERT INTO PersonalMedico (dni, nombres, apellidos, colegiatura, especialidad, telefono, email)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            '''
+            params = (dni, nombres, apellidos, colegiatura, especialidad, telefono, email)
+            msg = "Personal médico registrado con éxito."
 
         exito = db_query(query, params, commit=True)
         if exito:
-            return jsonify({"success": True, "message": "Personal médico registrado con éxito."}), 200
+            return jsonify({"success": True, "message": msg}), 200
         else:
-            return jsonify({"success": False, "message": "Error al guardar personal médico."}), 500
+            return jsonify({"success": False, "message": "No se pudo guardar la información del personal médico."}), 500
 
     # Método GET: Listar médicos
     query = "SELECT id, dni, nombres, apellidos, colegiatura, especialidad, telefono, email FROM PersonalMedico ORDER BY id DESC"
@@ -297,7 +340,7 @@ def gestionar_personal_medico():
     return jsonify({"success": True, "data": medicos}), 200
 
 # ==========================================
-# ENDPOINTS DE RESPALDO (Evitan 404 en JavaScript)
+# ENDPOINTS DE RESPALDO
 # ==========================================
 @app.route('/api/citas', methods=['GET', 'POST'])
 def api_citas():
@@ -357,7 +400,7 @@ def hospitalizacion():
 @app.errorhandler(405)
 def method_not_allowed(e):
     if request.path.startswith('/api/'):
-        return jsonify({"success": False, "message": f"Método HTTP {request.method} no permitido en esta ruta."}), 405
+        return jsonify({"success": False, "message": f"Método HTTP {request.method} no permitido."}), 405
     return "<h2>Método no permitido (405)</h2>", 405
 
 @app.errorhandler(500)
