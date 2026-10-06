@@ -1,424 +1,806 @@
 import os
-import sqlite3
+from datetime import datetime
+from flask import Flask, render_template, request, jsonify, current_app
+import pyodbc
 import requests
-from flask import Flask, render_template, request, jsonify
+from dotenv import load_dotenv
 
-# Importación opcional de pyodbc para entorno Windows local
-try:
-    import pyodbc
-    HAS_PYODBC = True
-except ImportError:
-    HAS_PYODBC = False
+load_dotenv()  # Carga variables desde el archivo .env
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "medcontrol_secret_key_2026")
 
-# Detección del entorno Render y ruta de la BD SQLite
-IS_RENDER = os.environ.get("RENDER") is not None
-SQLITE_DB_PATH = os.path.join(os.path.dirname(__file__), "medcontrol.db")
-
-# ==========================================
-# HELPER DE RENDERIZADO SEGURO DE PLANTILLAS
-# ==========================================
-def safe_render_template(template_name, **context):
-    templates_dir = os.path.join(os.path.dirname(__file__), 'templates')
-    target_path = os.path.join(templates_dir, template_name)
-    
-    if os.path.exists(target_path):
-        return render_template(template_name, **context)
-    
-    for fallback in ['index.html', 'pacientes.html']:
-        if os.path.exists(os.path.join(templates_dir, fallback)):
-            return render_template(fallback, **context)
-            
-    return (
-        f"<h2>MedControl Pro Activo</h2>"
-        f"<p>No se encontró la plantilla <code>{template_name}</code> en la carpeta <code>templates/</code>.</p>", 200
-    )
+# ---- INICIO: Integración del módulo ML + GPT ----
+import ml_store
+ml_store.configurar(lambda: get_db_connection())  # el módulo ML reutiliza TU conexión a SQL Server
+from blueprint_ml_gpt import ml_gpt_bp
+app.register_blueprint(ml_gpt_bp)
+# ---- FIN: Integración del módulo ML + GPT ----
 
 # ==========================================
-# INICIALIZACIÓN Y AUTO-MIGRACIÓN DE BD
+# CONFIGURACIÓN DE CONEXIÓN A SQL SERVER
 # ==========================================
-def init_sqlite_db():
-    conn = sqlite3.connect(SQLITE_DB_PATH)
-    cursor = conn.cursor()
-    
-    # Tabla Pacientes
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Pacientes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            dni TEXT UNIQUE NOT NULL,
-            nombres TEXT,
-            apellidos TEXT,
-            telefono TEXT,
-            email TEXT,
-            direccion TEXT,
-            fecha_nacimiento TEXT,
-            genero TEXT,
-            grupo_sanguineo TEXT,
-            alergias TEXT,
-            fecha_registro DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+SERVER = os.getenv('DB_SERVER', 'DESKTOP-PEB6BCK')
+DATABASE = os.getenv('DB_NAME', 'HDAC_Hospital_DB')
+DB_USER = os.getenv('DB_USER', 'sa')
+DB_PASSWORD = os.getenv('DB_PASSWORD', 'tu_contraseña_aqui')
 
-    # Migración automática de columnas por si la BD ya existía previa a cambios
-    cursor.execute("PRAGMA table_info(Pacientes)")
-    existing_cols = [col[1] for col in cursor.fetchall()]
-    required_cols = {
-        "telefono": "TEXT",
-        "email": "TEXT",
-        "direccion": "TEXT",
-        "fecha_nacimiento": "TEXT",
-        "genero": "TEXT",
-        "grupo_sanguineo": "TEXT",
-        "alergias": "TEXT"
-    }
-    for col, col_type in required_cols.items():
-        if col not in existing_cols:
-            try:
-                cursor.execute(f"ALTER TABLE Pacientes ADD COLUMN {col} {col_type}")
-            except Exception as e:
-                print(f"[Migration Warning]: {e}")
 
-    # Tabla Personal Médico
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS PersonalMedico (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            dni TEXT UNIQUE NOT NULL,
-            nombres TEXT,
-            apellidos TEXT,
-            colegiatura TEXT,
-            especialidad TEXT,
-            telefono TEXT,
-            email TEXT,
-            fecha_registro DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-
-    # Tabla Citas
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Citas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            paciente_id INTEGER,
-            medico_id INTEGER,
-            fecha TEXT,
-            hora TEXT,
-            motivo TEXT,
-            estado TEXT DEFAULT 'Pendiente',
-            FOREIGN KEY (paciente_id) REFERENCES Pacientes (id),
-            FOREIGN KEY (medico_id) REFERENCES PersonalMedico (id)
-        )
-    ''')
-
-    conn.commit()
-    conn.close()
-
-init_sqlite_db()
-
-# ==========================================
-# CONEXIÓN Y CONSULTAS A LA BASE DE DATOS
-# ==========================================
 def get_db_connection():
-    if IS_RENDER or not HAS_PYODBC:
-        conn = sqlite3.connect(SQLITE_DB_PATH)
-        conn.row_factory = sqlite3.Row
-        return conn, "sqlite"
-
+    """Conecta a SQL Server. Intenta primero Windows Auth, luego SQL Auth."""
     try:
-        server = os.environ.get("DB_SERVER", "localhost\\SQLEXPRESS")
-        database = os.environ.get("DB_NAME", "MedControlDB")
-        conn_str = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={database};Trusted_Connection=yes;"
-        conn = pyodbc.connect(conn_str, timeout=3)
-        return conn, "sqlserver"
-    except Exception as e:
-        print(f"[DB Warning] SQL Server no accesible ({e}). Usando SQLite.")
-        conn = sqlite3.connect(SQLITE_DB_PATH)
-        conn.row_factory = sqlite3.Row
-        return conn, "sqlite"
+        conn_str = (
+            f'DRIVER={{ODBC Driver 17 for SQL Server}};'
+            f'SERVER={SERVER};'
+            f'DATABASE={DATABASE};'
+            'Trusted_Connection=yes;'
+        )
+        return pyodbc.connect(conn_str, timeout=5)
+    except Exception:
+        conn_str = (
+            f'DRIVER={{ODBC Driver 17 for SQL Server}};'
+            f'SERVER={SERVER};'
+            f'DATABASE={DATABASE};'
+            f'UID={DB_USER};PWD={DB_PASSWORD};'
+        )
+        return pyodbc.connect(conn_str, timeout=5)
 
-def db_query(query, params=(), fetchone=False, fetchall=False, commit=False):
-    conn, db_type = get_db_connection()
-    cursor = conn.cursor()
-    result = None
 
+def db_query(query, params=(), commit=False, fetch=True):
+    """Ejecuta consultas en SQL Server y retorna registros como lista de diccionarios."""
+    conn = None
     try:
-        exec_query = query
-        if db_type == "sqlserver":
-            exec_query = query.replace("AUTOINCREMENT", "IDENTITY(1,1)")
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(query, params)
 
-        cursor.execute(exec_query, params)
-
+        result = None
         if commit:
             conn.commit()
-            result = True
-        elif fetchone:
-            row = cursor.fetchone()
-            if row:
-                result = dict(row) if db_type == "sqlite" else dict(zip([column[0] for column in cursor.description], row))
-        elif fetchall:
-            rows = cursor.fetchall()
-            if rows:
-                if db_type == "sqlite":
-                    result = [dict(row) for row in rows]
-                else:
-                    columns = [column[0] for column in cursor.description]
-                    result = [dict(zip(columns, row)) for row in rows]
-            else:
-                result = []
+
+        if fetch and cursor.description:
+            columns = [col[0] for col in cursor.description]
+            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+        return result
     except Exception as e:
-        print(f"[DB Error] Fallo en la consulta ({db_type}): {e}")
-        if commit:
+        if conn and commit:
             conn.rollback()
-        result = False if commit else ([] if fetchall else None)
+        raise e
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
-    return result
 
-# ==========================================
-# INTEGRACIÓN API RENIEC
-# ==========================================
-@app.route('/api/reniec/<dni>', methods=['GET'])
-@app.route('/api/reniec', methods=['GET'])
-@app.route('/reniec/<dni>', methods=['GET'])
-def consultar_reniec(dni=None):
-    if not dni:
-        dni = request.args.get('dni') or request.args.get('numero')
+def db_query_get_id(query, params=()):
+    """Ejecuta un INSERT y devuelve el ID generado mediante SCOPE_IDENTITY()."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        cursor.execute("SELECT SCOPE_IDENTITY() AS id")
+        row = cursor.fetchone()
+        new_id = int(row[0]) if row and row[0] is not None else None
+        conn.commit()
+        return new_id
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise e
+    finally:
+        if conn:
+            conn.close()
 
-    if not dni or len(dni) != 8 or not dni.isdigit():
-        return jsonify({"success": False, "message": "El DNI debe contener exactamente 8 dígitos numéricos."}), 400
-
-    token_decolecta = os.environ.get("RENIEC_TOKEN_DECOLECTA")
-    token_apisperu = os.environ.get("RENIEC_TOKEN_APISPERU")
-
-    # 1. Probar API Decolecta
-    if token_decolecta:
-        try:
-            url = f"https://api.decolecta.com/v1/reniec/dni?numero={dni}"
-            headers = {"Authorization": f"Bearer {token_decolecta}", "Accept": "application/json"}
-            res = requests.get(url, headers=headers, timeout=5)
-            if res.status_code == 200:
-                data = res.json()
-                nombres = data.get("nombres") or data.get("first_name", "")
-                paterno = data.get("apellidoPaterno") or data.get("first_last_name", "")
-                materno = data.get("apellidoMaterno") or data.get("second_last_name", "")
-                if nombres:
-                    return jsonify({
-                        "success": True,
-                        "nombres": nombres.strip(),
-                        "apellidos": f"{paterno} {materno}".strip(),
-                        "source": "Decolecta"
-                    }), 200
-        except Exception as e:
-            print(f"[RENIEC Decolecta Error]: {e}")
-
-    # 2. Probar API ApisPerú
-    if token_apisperu:
-        try:
-            url = f"https://dniruc.apisperu.com/api/v1/dni/{dni}?token={token_apisperu}"
-            res = requests.get(url, timeout=5)
-            if res.status_code == 200:
-                data = res.json()
-                if data.get("nombres"):
-                    return jsonify({
-                        "success": True,
-                        "nombres": data.get("nombres", "").strip(),
-                        "apellidos": f"{data.get('apellidoPaterno', '')} {data.get('apellidoMaterno', '')}".strip(),
-                        "source": "ApisPerú"
-                    }), 200
-        except Exception as e:
-            print(f"[RENIEC ApisPerú Error]: {e}")
-
-    return jsonify({"success": False, "message": f"No se encontraron datos para el DNI {dni}."}), 404
 
 # ==========================================
-# ENDPOINTS UNIFICADOS DE PACIENTES
-# ==========================================
-@app.route('/pacientes')
-def vista_pacientes():
-    return safe_render_template('pacientes.html')
-
-@app.route('/api/pacientes', methods=['GET', 'POST'])
-@app.route('/api/pacientes/guardar', methods=['POST'])
-def gestionar_pacientes():
-    if request.method == 'POST':
-        data = request.get_json(force=True, silent=True) or request.form.to_dict() or request.args.to_dict() or {}
-        
-        dni = str(data.get('dni', '')).strip()
-        nombres = str(data.get('nombres', '')).strip()
-        apellidos = str(data.get('apellidos', '')).strip()
-        telefono = str(data.get('telefono', '')).strip()
-        email = str(data.get('email', '')).strip()
-        direccion = str(data.get('direccion', '')).strip()
-        fecha_nac = str(data.get('fecha_nacimiento') or data.get('fecha_nac') or '').strip()
-        genero = str(data.get('genero', '')).strip()
-        grupo_sangre = str(data.get('grupo_sanguineo') or data.get('grupo_sangre') or '').strip()
-        alergias = str(data.get('alergias', '')).strip()
-
-        if not dni or not nombres or not apellidos:
-            return jsonify({"success": False, "message": "DNI, nombres y apellidos son requeridos."}), 400
-
-        existente = db_query("SELECT id FROM Pacientes WHERE dni = ?", (dni,), fetchone=True)
-
-        if existente:
-            query = '''
-                UPDATE Pacientes 
-                SET nombres=?, apellidos=?, telefono=?, email=?, direccion=?, fecha_nacimiento=?, genero=?, grupo_sanguineo=?, alergias=?
-                WHERE dni=?
-            '''
-            params = (nombres, apellidos, telefono, email, direccion, fecha_nac, genero, grupo_sangre, alergias, dni)
-            msg = "Paciente actualizado correctamente."
-        else:
-            query = '''
-                INSERT INTO Pacientes (dni, nombres, apellidos, telefono, email, direccion, fecha_nacimiento, genero, grupo_sanguineo, alergias)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            '''
-            params = (dni, nombres, apellidos, telefono, email, direccion, fecha_nac, genero, grupo_sangre, alergias)
-            msg = "Paciente registrado con éxito."
-        
-        exito = db_query(query, params, commit=True)
-        if exito:
-            return jsonify({"success": True, "message": msg}), 200
-        else:
-            return jsonify({"success": False, "message": "No se pudo guardar la información en la base de datos."}), 500
-
-    # GET: Retorna un arreglo directo de lista para compatibilidad con cachePacientes.map(...)
-    query = "SELECT id, dni, nombres, apellidos, telefono, email, direccion, fecha_nacimiento, genero, grupo_sanguineo, alergias FROM Pacientes ORDER BY id DESC"
-    pacientes = db_query(query, fetchall=True) or []
-    return jsonify(pacientes), 200
-
-# ==========================================
-# ENDPOINTS UNIFICADOS DE PERSONAL MÉDICO
-# ==========================================
-@app.route('/personal_medico')
-def vista_personal_medico():
-    return safe_render_template('personal_medico.html')
-
-@app.route('/api/personal_medico', methods=['GET', 'POST'])
-@app.route('/api/personal_medico/guardar', methods=['POST'])
-def gestionar_personal_medico():
-    if request.method == 'POST':
-        data = request.get_json(force=True, silent=True) or request.form.to_dict() or request.args.to_dict() or {}
-        
-        dni = str(data.get('dni', '')).strip()
-        nombres = str(data.get('nombres', '')).strip()
-        apellidos = str(data.get('apellidos', '')).strip()
-        colegiatura = str(data.get('colegiatura', '')).strip()
-        especialidad = str(data.get('especialidad', '')).strip()
-        telefono = str(data.get('telefono', '')).strip()
-        email = str(data.get('email', '')).strip()
-
-        if not dni or not nombres or not apellidos:
-            return jsonify({"success": False, "message": "DNI, nombres y apellidos son requeridos."}), 400
-
-        existente = db_query("SELECT id FROM PersonalMedico WHERE dni = ?", (dni,), fetchone=True)
-
-        if existente:
-            query = '''
-                UPDATE PersonalMedico
-                SET nombres=?, apellidos=?, colegiatura=?, especialidad=?, telefono=?, email=?
-                WHERE dni=?
-            '''
-            params = (nombres, apellidos, colegiatura, especialidad, telefono, email, dni)
-            msg = "Personal médico actualizado con éxito."
-        else:
-            query = '''
-                INSERT INTO PersonalMedico (dni, nombres, apellidos, colegiatura, especialidad, telefono, email)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            '''
-            params = (dni, nombres, apellidos, colegiatura, especialidad, telefono, email)
-            msg = "Personal médico registrado con éxito."
-
-        exito = db_query(query, params, commit=True)
-        if exito:
-            return jsonify({"success": True, "message": msg}), 200
-        else:
-            return jsonify({"success": False, "message": "No se pudo guardar la información del personal médico."}), 500
-
-    # GET: Retorna un arreglo directo
-    query = "SELECT id, dni, nombres, apellidos, colegiatura, especialidad, telefono, email FROM PersonalMedico ORDER BY id DESC"
-    medicos = db_query(query, fetchall=True) or []
-    return jsonify(medicos), 200
-
-# ==========================================
-# ENDPOINTS DE RESPALDO
-# ==========================================
-@app.route('/api/citas', methods=['GET', 'POST'])
-def api_citas():
-    return jsonify([]), 200
-
-@app.route('/api/facturacion', methods=['GET', 'POST'])
-def api_facturacion():
-    return jsonify([]), 200
-
-@app.route('/api/laboratorio', methods=['GET', 'POST'])
-def api_laboratorio():
-    return jsonify([]), 200
-
-@app.route('/api/notificaciones', methods=['GET', 'POST'])
-def api_notificaciones():
-    return jsonify([]), 200
-
-# ==========================================
-# RUTAS DE VISTAS DE NAVEGACIÓN
+# RUTA PRINCIPAL
 # ==========================================
 @app.route('/')
-@app.route('/dashboard')
-def dashboard():
-    return safe_render_template('dashboard.html')
+def index():
+    return render_template('index.html')
 
-@app.route('/citas')
-def citas():
-    return safe_render_template('citas.html')
-
-@app.route('/triaje')
-def triaje():
-    return safe_render_template('triaje.html')
-
-@app.route('/historial')
-def historial():
-    return safe_render_template('historial.html')
-
-@app.route('/facturacion')
-def facturacion():
-    return safe_render_template('facturacion.html')
-
-@app.route('/farmacia')
-def farmacia():
-    return safe_render_template('farmacia.html')
-
-@app.route('/laboratorio')
-def laboratorio():
-    return safe_render_template('laboratorio.html')
-
-@app.route('/hospitalizacion')
-def hospitalizacion():
-    return safe_render_template('hospitalizacion.html')
 
 # ==========================================
-# MANEJADORES DE ERRORES INTELIGENTES
+# API CONSULTA RENIEC EN TIEMPO REAL
 # ==========================================
-@app.errorhandler(405)
-def method_not_allowed(e):
-    if request.path.startswith('/api/'):
-        return jsonify({"success": False, "message": f"Método HTTP {request.method} no permitido."}), 405
-    return "<h2>Método no permitido (405)</h2>", 405
+@app.route('/api/reniec/<dni>', methods=['GET'])
+def buscar_reniec(dni):
+    """Consulta DNI mediante APIs Perú o Decolecta."""
+    if len(dni) != 8 or not dni.isdigit():
+        return jsonify({'error': 'El DNI debe contener exactamente 8 dígitos numéricos'}), 400
 
-@app.errorhandler(500)
-def server_error(e):
-    if request.path.startswith('/api/'):
-        return jsonify({"success": False, "message": f"Error interno en la API: {str(e)}"}), 500
-    return f"<h2>Error Interno del Servidor (500)</h2><p>{str(e)}</p>", 500
+    token_decolecta = os.getenv('RENIEC_TOKEN_DECOLECTA', '').strip()
+    token_apisperu = os.getenv('RENIEC_TOKEN_APISPERU', os.getenv('RENIEC_TOKEN', '')).strip()
 
-@app.errorhandler(404)
-def not_found(e):
-    if request.path.startswith('/api/'):
-        return jsonify({"success": False, "message": "Endpoint de API no encontrado."}), 404
-    return "<h2>Página no encontrada (404)</h2><p>La ruta especificada no existe.</p>", 404
+    if not token_decolecta and not token_apisperu:
+        return jsonify({
+            'error': 'La consulta RENIEC requiere un token configurado en el archivo .env.'
+        }), 503
+
+    # Proveedor 1: Decolecta
+    if token_decolecta:
+        try:
+            res1 = requests.get(
+                f'https://api.decolecta.com/v1/reniec/dni?numero={dni}',
+                headers={'Authorization': f'Bearer {token_decolecta}', 'Accept': 'application/json'},
+                timeout=5
+            )
+            if res1.status_code == 200:
+                data = res1.json()
+                nombre_completo = data.get('full_name') or ''
+                paterno = data.get('first_last_name', '')
+                materno = data.get('second_last_name', '')
+                nombres = data.get('first_name') or nombre_completo.replace(paterno, '').replace(materno, '').strip()
+                return jsonify({
+                    'dni': dni,
+                    'nombres': nombres,
+                    'apellidoPaterno': paterno,
+                    'apellidoMaterno': materno,
+                    'apellidos': f"{paterno} {materno}".strip()
+                })
+        except Exception as e:
+            current_app.logger.warning(f'Error en Decolecta: {e}')
+
+    # Proveedor 2: ApisPerú
+    if token_apisperu:
+        try:
+            res2 = requests.get(
+                f'https://dniruc.apisperu.com/api/v1/dni/{dni}',
+                params={'token': token_apisperu},
+                timeout=5
+            )
+            if res2.status_code == 200:
+                data = res2.json()
+                paterno = data.get('apellidoPaterno', '')
+                materno = data.get('apellidoMaterno', '')
+                return jsonify({
+                    'dni': dni,
+                    'nombres': data.get('nombres', ''),
+                    'apellidoPaterno': paterno,
+                    'apellidoMaterno': materno,
+                    'apellidos': f"{paterno} {materno}".strip()
+                })
+        except Exception as e:
+            current_app.logger.warning(f'Error en ApisPerú: {e}')
+
+    return jsonify({'error': 'No se encontraron datos para el DNI especificado.'}), 404
+
 
 # ==========================================
-# INICIO DEL SERVIDOR
+# API DASHBOARD
+# ==========================================
+@app.route('/api/dashboard', methods=['GET'])
+def get_dashboard():
+    try:
+        p_count = db_query("SELECT COUNT(*) AS total FROM dbo.Pacientes")[0]['total']
+        c_count = db_query("SELECT COUNT(*) AS total FROM dbo.CitasMedicas")[0]['total']
+        m_count = db_query("SELECT COUNT(*) AS total FROM dbo.PersonalMedico")[0]['total']
+        h_count = db_query("SELECT COUNT(*) AS total FROM dbo.Hospitalizacion WHERE estado='Activo'")[0]['total']
+        ing_row = db_query("""
+            SELECT SUM(monto_total) AS total FROM dbo.ComprobantesFacturacion
+            WHERE CAST(fecha_emision AS DATE) = CAST(GETDATE() AS DATE)
+        """)
+        ingresos = float(ing_row[0]['total']) if ing_row and ing_row[0]['total'] else 0.0
+
+        return jsonify({
+            'pacientes': p_count,
+            'citas': c_count,
+            'medicos': m_count,
+            'hospitalizados': h_count,
+            'ingresos': ingresos
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==========================================
+# 1. MÓDULO PACIENTES
+# ==========================================
+@app.route('/api/pacientes', methods=['GET'])
+def get_pacientes():
+    try:
+        rows = db_query("""
+            SELECT id, dni, nombre, apellido,
+                   CONVERT(VARCHAR(10), fecha_nacimiento, 120) AS fnac,
+                   genero, telefono, email, direccion, latitud, longitud,
+                   grupo_sanguineo, alergias
+            FROM dbo.Pacientes ORDER BY id DESC
+        """)
+        return jsonify(rows or [])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/pacientes', methods=['POST'])
+def save_paciente():
+    try:
+        data = request.json or {}
+        p_id = data.get('id')
+        if p_id:
+            db_query("""
+                UPDATE dbo.Pacientes
+                SET dni=?, nombre=?, apellido=?, fecha_nacimiento=?, genero=?, telefono=?, email=?,
+                    direccion=?, latitud=?, longitud=?, grupo_sanguineo=?, alergias=?
+                WHERE id=?
+            """, (data.get('dni'), data.get('nombre'), data.get('apellido'), data.get('fnac') or None,
+                  data.get('genero'), data.get('tel'), data.get('email'), data.get('direccion'),
+                  data.get('latitud'), data.get('longitud'), data.get('grupo_sanguineo'),
+                  data.get('alergias'), p_id), commit=True)
+            return jsonify({'message': 'Paciente actualizado exitosamente', 'id': p_id})
+        else:
+            new_id = db_query_get_id("""
+                INSERT INTO dbo.Pacientes (dni, nombre, apellido, fecha_nacimiento, genero, telefono, email,
+                                            direccion, latitud, longitud, grupo_sanguineo, alergias)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (data.get('dni'), data.get('nombre'), data.get('apellido'), data.get('fnac') or None,
+                  data.get('genero'), data.get('tel'), data.get('email'), data.get('direccion'),
+                  data.get('latitud'), data.get('longitud'), data.get('grupo_sanguineo'), data.get('alergias')))
+            return jsonify({'message': 'Paciente guardado exitosamente', 'id': new_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/pacientes/<int:id>', methods=['DELETE'])
+def delete_paciente(id):
+    try:
+        db_query("DELETE FROM dbo.Pacientes WHERE id=?", (id,), commit=True)
+        return jsonify({'message': 'Paciente eliminado de SQL Server'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==========================================
+# 2. MÓDULO ESPECIALIDADES
+# ==========================================
+@app.route('/api/especialidades', methods=['GET'])
+def get_especialidades():
+    try:
+        rows = db_query("SELECT id, nombre, descripcion FROM dbo.Especialidades ORDER BY nombre")
+        return jsonify(rows or [])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==========================================
+# 3. MÓDULO PERSONAL MÉDICO
+# ==========================================
+@app.route('/api/medicos', methods=['GET'])
+def get_medicos():
+    try:
+        rows = db_query("""
+            SELECT m.id, m.dni, m.nombre, m.apellido, m.colegiatura_cmp AS cmp,
+                   m.especialidad_id, e.nombre AS especialidad, m.telefono AS tel, m.email
+            FROM dbo.PersonalMedico m
+            LEFT JOIN dbo.Especialidades e ON m.especialidad_id = e.id
+            ORDER BY m.id DESC
+        """)
+        return jsonify(rows or [])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/medicos', methods=['POST'])
+def save_medico():
+    try:
+        data = request.json or {}
+        m_id = data.get('id')
+        if m_id:
+            db_query("""
+                UPDATE dbo.PersonalMedico
+                SET dni=?, nombre=?, apellido=?, colegiatura_cmp=?, especialidad_id=?, telefono=?, email=?
+                WHERE id=?
+            """, (data.get('dni'), data.get('nombre'), data.get('apellido'), data.get('cmp'),
+                  data.get('especialidad_id'), data.get('tel'), data.get('email'), m_id), commit=True)
+            return jsonify({'message': 'Personal médico actualizado exitosamente', 'id': m_id})
+        else:
+            new_id = db_query_get_id("""
+                INSERT INTO dbo.PersonalMedico (dni, nombre, apellido, colegiatura_cmp, especialidad_id, telefono, email)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (data.get('dni'), data.get('nombre'), data.get('apellido'), data.get('cmp'),
+                  data.get('especialidad_id'), data.get('tel'), data.get('email')))
+            return jsonify({'message': 'Personal médico guardado exitosamente', 'id': new_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/medicos/<int:id>', methods=['DELETE'])
+def delete_medico(id):
+    try:
+        db_query("DELETE FROM dbo.PersonalMedico WHERE id=?", (id,), commit=True)
+        return jsonify({'message': 'Personal médico eliminado'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==========================================
+# 4. MÓDULO CITAS MÉDICAS
+# ==========================================
+@app.route('/api/citas', methods=['GET'])
+def get_citas():
+    try:
+        rows = db_query("""
+            SELECT c.id, c.paciente_id, c.medico_id,
+                   CONVERT(VARCHAR(10), c.fecha_cita, 120) AS fecha,
+                   CONVERT(VARCHAR(5), c.hora_cita, 108) AS hora,
+                   c.estado, c.motivo,
+                   CONCAT(p.nombre, ' ', p.apellido) AS paciente_nombre,
+                   CONCAT('Dr(a). ', m.nombre, ' ', m.apellido) AS medico_nombre
+            FROM dbo.CitasMedicas c
+            LEFT JOIN dbo.Pacientes p ON c.paciente_id = p.id
+            LEFT JOIN dbo.PersonalMedico m ON c.medico_id = m.id
+            ORDER BY c.fecha_cita DESC, c.hora_cita DESC
+        """)
+        return jsonify(rows or [])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/citas', methods=['POST'])
+def save_cita():
+    try:
+        data = request.json or {}
+        c_id = data.get('id')
+        if c_id:
+            db_query("""
+                UPDATE dbo.CitasMedicas
+                SET paciente_id=?, medico_id=?, fecha_cita=?, hora_cita=?, estado=?, motivo=?
+                WHERE id=?
+            """, (data.get('paciente_id'), data.get('medico_id'), data.get('fecha'), data.get('hora'),
+                  data.get('estado'), data.get('motivo'), c_id), commit=True)
+            return jsonify({'message': 'Cita médica actualizada exitosamente', 'id': c_id})
+        else:
+            new_id = db_query_get_id("""
+                INSERT INTO dbo.CitasMedicas (paciente_id, medico_id, fecha_cita, hora_cita, estado, motivo)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (data.get('paciente_id'), data.get('medico_id'), data.get('fecha'), data.get('hora'),
+                  data.get('estado', 'Programada'), data.get('motivo')))
+            return jsonify({'message': 'Cita médica guardada exitosamente', 'id': new_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/citas/<int:id>', methods=['DELETE'])
+def delete_cita(id):
+    try:
+        db_query("DELETE FROM dbo.CitasMedicas WHERE id=?", (id,), commit=True)
+        return jsonify({'message': 'Cita eliminada'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==========================================
+# 5. MÓDULO TRIAJE
+# ==========================================
+@app.route('/api/triaje', methods=['GET'])
+def get_triaje():
+    try:
+        rows = db_query("""
+            SELECT t.id, t.cita_id, t.paciente_id, t.presion_arterial AS presion, t.temperatura AS temp,
+                   t.frecuencia_cardiaca AS fc, t.frecuencia_respiratoria AS fr,
+                   t.saturacion_oxigeno AS so2, t.peso_kg AS peso, t.talla_cm AS talla, t.imc,
+                   CONCAT(p.nombre, ' ', p.apellido) AS paciente
+            FROM dbo.Triaje t
+            LEFT JOIN dbo.Pacientes p ON t.paciente_id = p.id
+            ORDER BY t.id DESC
+        """)
+        return jsonify(rows or [])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/triaje', methods=['POST'])
+def save_triaje():
+    try:
+        data = request.json or {}
+        t_id = data.get('id')
+
+        peso = float(data.get('peso', 0) or 0)
+        talla_m = float(data.get('talla', 1) or 1) / 100
+        imc = round(peso / (talla_m * talla_m), 2) if talla_m > 0 else 0
+
+        cita_id = data.get('cita_id')
+        cita_row = db_query("SELECT paciente_id FROM dbo.CitasMedicas WHERE id=?", (cita_id,))
+        paciente_id = cita_row[0]['paciente_id'] if cita_row else data.get('paciente_id')
+
+        if t_id:
+            db_query("""
+                UPDATE dbo.Triaje
+                SET cita_id=?, paciente_id=?, presion_arterial=?, temperatura=?, frecuencia_cardiaca=?,
+                    saturacion_oxigeno=?, peso_kg=?, talla_cm=?, imc=?
+                WHERE id=?
+            """, (cita_id, paciente_id, data.get('presion'), data.get('temp'), data.get('fc'),
+                  data.get('so2'), data.get('peso'), data.get('talla'), imc, t_id), commit=True)
+            return jsonify({'message': 'Triaje actualizado exitosamente', 'id': t_id})
+        else:
+            new_id = db_query_get_id("""
+                INSERT INTO dbo.Triaje (cita_id, paciente_id, presion_arterial, temperatura,
+                                         frecuencia_cardiaca, saturacion_oxigeno, peso_kg, talla_cm, imc)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (cita_id, paciente_id, data.get('presion'), data.get('temp'), data.get('fc'),
+                  data.get('so2'), data.get('peso'), data.get('talla'), imc))
+            
+            if cita_id:
+                db_query("UPDATE dbo.CitasMedicas SET estado='En Triaje' WHERE id=?", (cita_id,), commit=True, fetch=False)
+            return jsonify({'message': 'Triaje guardado exitosamente', 'id': new_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/triaje/<int:id>', methods=['DELETE'])
+def delete_triaje(id):
+    try:
+        db_query("DELETE FROM dbo.Triaje WHERE id=?", (id,), commit=True)
+        return jsonify({'message': 'Triaje eliminado'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==========================================
+# 6. MÓDULO HISTORIAL CLÍNICO
+# ==========================================
+@app.route('/api/historial', methods=['GET'])
+def get_historial():
+    try:
+        rows = db_query("""
+            SELECT h.id, h.cita_id, h.paciente_id, h.medico_id, h.motivo_consulta, h.sintomas,
+                   h.diagnostico, h.codigo_cie10 AS cie10, h.tratamiento, h.observaciones,
+                   CONVERT(VARCHAR(19), h.fecha_atencion, 120) AS fecha,
+                   CONCAT(p.nombre, ' ', p.apellido) AS paciente,
+                   CONCAT('Dr(a). ', m.nombre, ' ', m.apellido) AS medico
+            FROM dbo.HistorialClinico h
+            LEFT JOIN dbo.Pacientes p ON h.paciente_id = p.id
+            LEFT JOIN dbo.PersonalMedico m ON h.medico_id = m.id
+            ORDER BY h.id DESC
+        """)
+        return jsonify(rows or [])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/historial', methods=['POST'])
+def save_historial():
+    try:
+        data = request.json or {}
+        h_id = data.get('id')
+        cita_id = data.get('cita_id')
+
+        cita_row = db_query("SELECT paciente_id, medico_id FROM dbo.CitasMedicas WHERE id=?", (cita_id,))
+        if not cita_row:
+            return jsonify({'error': 'La cita seleccionada no existe'}), 400
+        paciente_id = cita_row[0]['paciente_id']
+        medico_id = cita_row[0]['medico_id']
+
+        if h_id:
+            db_query("""
+                UPDATE dbo.HistorialClinico
+                SET cita_id=?, paciente_id=?, medico_id=?, sintomas=?, diagnostico=?, codigo_cie10=?, tratamiento=?
+                WHERE id=?
+            """, (cita_id, paciente_id, medico_id, data.get('sintomas'), data.get('diagnostico'),
+                  data.get('cie10'), data.get('tratamiento'), h_id), commit=True)
+            return jsonify({'message': 'Historial clínico actualizado exitosamente', 'id': h_id})
+        else:
+            new_id = db_query_get_id("""
+                INSERT INTO dbo.HistorialClinico (cita_id, paciente_id, medico_id, sintomas, diagnostico,
+                                                   codigo_cie10, tratamiento)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (cita_id, paciente_id, medico_id, data.get('sintomas'), data.get('diagnostico'),
+                  data.get('cie10'), data.get('tratamiento')))
+            db_query("UPDATE dbo.CitasMedicas SET estado='Atendido' WHERE id=?", (cita_id,), commit=True, fetch=False)
+            return jsonify({'message': 'Historial clínico guardado exitosamente', 'id': new_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/historial/<int:id>', methods=['DELETE'])
+def delete_historial(id):
+    try:
+        db_query("DELETE FROM dbo.HistorialClinico WHERE id=?", (id,), commit=True)
+        return jsonify({'message': 'Historial eliminado'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==========================================
+# 7. MÓDULO CAJA Y FACTURACIÓN
+# ==========================================
+@app.route('/api/facturacion', methods=['GET'])
+def get_facturacion():
+    try:
+        rows = db_query("""
+            SELECT f.id, f.paciente_id, f.tipo_comprobante AS tipo, f.numero_serie AS serie,
+                   f.numero_correlativo AS correlativo, f.monto_subtotal, f.monto_igv,
+                   f.monto_total AS monto, f.metodo_pago AS metodo, f.estado,
+                   CONVERT(VARCHAR(19), f.fecha_emision, 120) AS fecha,
+                   CONCAT(p.nombre, ' ', p.apellido) AS paciente
+            FROM dbo.ComprobantesFacturacion f
+            LEFT JOIN dbo.Pacientes p ON f.paciente_id = p.id
+            ORDER BY f.id DESC
+        """)
+        return jsonify(rows or [])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/facturacion', methods=['POST'])
+def save_facturacion():
+    try:
+        data = request.json or {}
+        f_id = data.get('id')
+
+        monto_total = float(data.get('monto', 0) or 0)
+        monto_subtotal = round(monto_total / 1.18, 2)
+        monto_igv = round(monto_total - monto_subtotal, 2)
+
+        if f_id:
+            db_query("""
+                UPDATE dbo.ComprobantesFacturacion
+                SET paciente_id=?, tipo_comprobante=?, numero_serie=?, numero_correlativo=?,
+                    monto_subtotal=?, monto_igv=?, monto_total=?, metodo_pago=?
+                WHERE id=?
+            """, (data.get('paciente_id'), data.get('tipo'), data.get('serie'), data.get('correlativo'),
+                  monto_subtotal, monto_igv, monto_total, data.get('metodo'), f_id), commit=True)
+            return jsonify({'message': 'Comprobante actualizado exitosamente', 'id': f_id})
+        else:
+            new_id = db_query_get_id("""
+                INSERT INTO dbo.ComprobantesFacturacion (paciente_id, tipo_comprobante, numero_serie,
+                    numero_correlativo, monto_subtotal, monto_igv, monto_total, metodo_pago)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (data.get('paciente_id'), data.get('tipo'), data.get('serie'), data.get('correlativo'),
+                  monto_subtotal, monto_igv, monto_total, data.get('metodo')))
+            return jsonify({'message': 'Comprobante registrado exitosamente', 'id': new_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/facturacion/<int:id>', methods=['DELETE'])
+def delete_facturacion(id):
+    try:
+        db_query("UPDATE dbo.ComprobantesFacturacion SET estado='Anulado' WHERE id=?", (id,), commit=True)
+        return jsonify({'message': 'Comprobante anulado'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==========================================
+# 8. MÓDULO FARMACIA
+# ==========================================
+@app.route('/api/farmacia', methods=['GET'])
+def get_farmacia():
+    try:
+        rows = db_query("""
+            SELECT id, codigo, nombre, descripcion AS tipo, stock, precio_unitario AS precio,
+                   CONVERT(VARCHAR(10), fecha_vencimiento, 120) AS vencimiento
+            FROM dbo.FarmaciaInsumos ORDER BY id DESC
+        """)
+        return jsonify(rows or [])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/farmacia', methods=['POST'])
+def save_farmacia():
+    try:
+        data = request.json or {}
+        far_id = data.get('id')
+        if far_id:
+            db_query("""
+                UPDATE dbo.FarmaciaInsumos
+                SET codigo=?, nombre=?, descripcion=?, stock=?, precio_unitario=?, fecha_vencimiento=?
+                WHERE id=?
+            """, (data.get('codigo'), data.get('nombre'), data.get('tipo'), data.get('stock'),
+                  data.get('precio'), data.get('vencimiento'), far_id), commit=True)
+            return jsonify({'message': 'Producto actualizado exitosamente', 'id': far_id})
+        else:
+            new_id = db_query_get_id("""
+                INSERT INTO dbo.FarmaciaInsumos (codigo, nombre, descripcion, stock, precio_unitario, fecha_vencimiento)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (data.get('codigo'), data.get('nombre'), data.get('tipo'), data.get('stock'),
+                  data.get('precio'), data.get('vencimiento')))
+            return jsonify({'message': 'Producto de farmacia guardado exitosamente', 'id': new_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/farmacia/<int:id>', methods=['DELETE'])
+def delete_farmacia(id):
+    try:
+        db_query("DELETE FROM dbo.FarmaciaInsumos WHERE id=?", (id,), commit=True)
+        return jsonify({'message': 'Producto eliminado'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==========================================
+# 9. MÓDULO LABORATORIO
+# ==========================================
+@app.route('/api/laboratorio', methods=['GET'])
+def get_laboratorio():
+    try:
+        rows = db_query("""
+            SELECT l.id, l.paciente_id, l.medico_id, l.nombre_examen AS examen, l.estado, l.resultado,
+                   CONCAT(p.nombre, ' ', p.apellido) AS paciente
+            FROM dbo.ExamenesLaboratorio l
+            LEFT JOIN dbo.Pacientes p ON l.paciente_id = p.id
+            ORDER BY l.id DESC
+        """)
+        return jsonify(rows or [])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/laboratorio', methods=['POST'])
+def save_laboratorio():
+    try:
+        data = request.json or {}
+        lab_id = data.get('id')
+        fecha_resultado = datetime.now().strftime('%Y-%m-%d %H:%M:%S') if data.get('estado') == 'Completado' else None
+
+        if lab_id:
+            db_query("""
+                UPDATE dbo.ExamenesLaboratorio
+                SET paciente_id=?, medico_id=?, nombre_examen=?, estado=?, resultado=?, fecha_resultado=?
+                WHERE id=?
+            """, (data.get('paciente_id'), data.get('medico_id'), data.get('examen'), data.get('estado'),
+                  data.get('resultado'), fecha_resultado, lab_id), commit=True)
+            return jsonify({'message': 'Examen actualizado exitosamente', 'id': lab_id})
+        else:
+            new_id = db_query_get_id("""
+                INSERT INTO dbo.ExamenesLaboratorio (paciente_id, medico_id, nombre_examen, estado, resultado)
+                VALUES (?, ?, ?, ?, ?)
+            """, (data.get('paciente_id'), data.get('medico_id'), data.get('examen'),
+                  data.get('estado', 'Pendiente'), data.get('resultado')))
+            return jsonify({'message': 'Examen guardado exitosamente', 'id': new_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/laboratorio/<int:id>', methods=['DELETE'])
+def delete_laboratorio(id):
+    try:
+        db_query("DELETE FROM dbo.ExamenesLaboratorio WHERE id=?", (id,), commit=True)
+        return jsonify({'message': 'Examen eliminado'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==========================================
+# 10. MÓDULO HOSPITALIZACIÓN (con camas reales)
+# ==========================================
+@app.route('/api/camas-disponibles', methods=['GET'])
+def get_camas_disponibles():
+    try:
+        rows = db_query("""
+            SELECT c.id, c.numero_cama, h.numero_habitacion, h.piso, h.tipo
+            FROM dbo.Camas c
+            JOIN dbo.Habitaciones h ON c.habitacion_id = h.id
+            WHERE c.estado = 'Disponible'
+            ORDER BY h.piso, h.numero_habitacion
+        """)
+        return jsonify(rows or [])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/hospitalizacion', methods=['GET'])
+def get_hospitalizacion():
+    try:
+        rows = db_query("""
+            SELECT h.id, h.paciente_id, h.medico_tratante_id AS medico_id, h.cama_id,
+                   h.diagnostico_ingreso AS diag, h.estado,
+                   CONVERT(VARCHAR(19), h.fecha_ingreso, 120) AS fecha,
+                   CONCAT(p.nombre, ' ', p.apellido) AS paciente,
+                   CONCAT('Dr(a). ', m.nombre, ' ', m.apellido) AS medico,
+                   CONCAT(hab.numero_habitacion, ' - ', c.numero_cama) AS cama
+            FROM dbo.Hospitalizacion h
+            LEFT JOIN dbo.Pacientes p ON h.paciente_id = p.id
+            LEFT JOIN dbo.PersonalMedico m ON h.medico_tratante_id = m.id
+            LEFT JOIN dbo.Camas c ON h.cama_id = c.id
+            LEFT JOIN dbo.Habitaciones hab ON c.habitacion_id = hab.id
+            ORDER BY h.id DESC
+        """)
+        return jsonify(rows or [])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/hospitalizacion', methods=['POST'])
+def save_hospitalizacion():
+    try:
+        data = request.json or {}
+        hosp_id = data.get('id')
+
+        if hosp_id:
+            db_query("""
+                UPDATE dbo.Hospitalizacion
+                SET paciente_id=?, medico_tratante_id=?, cama_id=?, diagnostico_ingreso=?
+                WHERE id=?
+            """, (data.get('paciente_id'), data.get('medico_id'), data.get('cama_id'),
+                  data.get('diag'), hosp_id), commit=True)
+            return jsonify({'message': 'Hospitalización actualizada exitosamente', 'id': hosp_id})
+        else:
+            new_id = db_query_get_id("""
+                INSERT INTO dbo.Hospitalizacion (paciente_id, medico_tratante_id, cama_id, diagnostico_ingreso)
+                VALUES (?, ?, ?, ?)
+            """, (data.get('paciente_id'), data.get('medico_id'), data.get('cama_id'), data.get('diag')))
+            db_query("UPDATE dbo.Camas SET estado='Ocupada' WHERE id=?", (data.get('cama_id'),), commit=True, fetch=False)
+            return jsonify({'message': 'Paciente hospitalizado exitosamente', 'id': new_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/hospitalizacion/<int:id>/alta', methods=['POST'])
+def dar_alta(id):
+    """Da de alta a un paciente y libera la cama."""
+    try:
+        row = db_query("SELECT cama_id FROM dbo.Hospitalizacion WHERE id=?", (id,))
+        if not row:
+            return jsonify({'error': 'Registro no encontrado'}), 404
+        cama_id = row[0]['cama_id']
+
+        db_query("""
+            UPDATE dbo.Hospitalizacion SET estado='Alta', fecha_alta=GETDATE() WHERE id=?
+        """, (id,), commit=True, fetch=False)
+        
+        if cama_id:
+            db_query("UPDATE dbo.Camas SET estado='Disponible' WHERE id=?", (cama_id,), commit=True, fetch=False)
+            
+        return jsonify({'message': 'Paciente dado de alta y cama liberada exitosamente'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/hospitalizacion/<int:id>', methods=['DELETE'])
+def delete_hospitalizacion(id):
+    try:
+        row = db_query("SELECT cama_id FROM dbo.Hospitalizacion WHERE id=?", (id,))
+        db_query("DELETE FROM dbo.Hospitalizacion WHERE id=?", (id,), commit=True)
+        if row and row[0]['cama_id']:
+            db_query("UPDATE dbo.Camas SET estado='Disponible' WHERE id=?", (row[0]['cama_id'],), commit=True, fetch=False)
+        return jsonify({'message': 'Registro de hospitalización eliminado y cama liberada'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==========================================
+# 11. MÓDULO NOTIFICACIONES
+# ==========================================
+@app.route('/api/notificaciones', methods=['GET'])
+def get_notificaciones():
+    try:
+        rows = db_query("""
+            SELECT id, destinatario_email AS email, asunto, mensaje, tipo,
+                   CONVERT(VARCHAR(19), fecha_envio, 120) AS fecha
+            FROM dbo.Notificaciones ORDER BY id DESC
+        """)
+        return jsonify(rows or [])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/notificaciones', methods=['POST'])
+def save_notificacion():
+    try:
+        data = request.json or {}
+        new_id = db_query_get_id("""
+            INSERT INTO dbo.Notificaciones (destinatario_email, asunto, mensaje, tipo, enviado)
+            VALUES (?, ?, ?, 'Email', 1)
+        """, (data.get('email'), data.get('asunto'), data.get('mensaje')))
+        return jsonify({'message': 'Notificación enviada y registrada exitosamente', 'id': new_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/notificaciones/<int:id>', methods=['DELETE'])
+def delete_notificacion(id):
+    try:
+        db_query("DELETE FROM dbo.Notificaciones WHERE id=?", (id,), commit=True)
+        return jsonify({'message': 'Notificación eliminada'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==========================================
+# EJECUCIÓN DEL SERVIDOR
 # ==========================================
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=not IS_RENDER)
+    app.run(debug=True, port=5000)
