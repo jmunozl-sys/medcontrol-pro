@@ -64,7 +64,6 @@ def db_query_get_id(query, params=()):
         if conn:
             conn.close()
 
-
 def init_sqlite_db():
     """Crea la estructura de tablas e inserta datos iniciales si no existen."""
     conn = get_db_connection()
@@ -226,6 +225,46 @@ def init_sqlite_db():
             fecha_envio TEXT DEFAULT (DATETIME('now', 'localtime'))
         );
     """)
+
+    # ==============================================================
+    # INSERTAR ESPECIALIDADES DE PRUEBA SI LA TABLA ESTÁ VACÍA
+    # ==============================================================
+    cursor.execute("SELECT COUNT(*) FROM Especialidades")
+    if cursor.fetchone()[0] == 0:
+        especialidades_iniciales = [
+            ('Medicina General', 'Atención médica primaria y general'),
+            ('Pediatría', 'Atención médica para niños y adolescentes'),
+            ('Cardiología', 'Enfermedades del corazón y sistema circulatorio'),
+            ('Ginecología y Obstetricia', 'Salud reproductiva femenina'),
+            ('Traumatología', 'Lesiones y sistema osteomuscular'),
+            ('Cirugía General', 'Procedimientos quirúrgicos generales'),
+            ('Neurología', 'Enfermedades del sistema nervioso'),
+            ('Dermatología', 'Atención y cuidado de la piel'),
+            ('Oftalmología', 'Salud visual'),
+            ('Psiquiatría', 'Salud mental'),
+            ('Otorrinolaringología', 'Enfermedades de oído, nariz y garganta'),
+            ('Gastroenterología', 'Sistema digestivo')
+        ]
+        cursor.executemany("""
+            INSERT INTO Especialidades (nombre, descripcion) VALUES (?, ?)
+        """, especialidades_iniciales)
+
+    # ==============================================================
+    # INSERTAR HABITACIONES Y CAMAS SI ESTÁN VACÍAS (PARA HOSPITALIZACIÓN)
+    # ==============================================================
+    cursor.execute("SELECT COUNT(*) FROM Habitaciones")
+    if cursor.fetchone()[0] == 0:
+        cursor.executescript("""
+            INSERT INTO Habitaciones (numero_habitacion, piso, tipo) VALUES ('101', 1, 'Individual');
+            INSERT INTO Habitaciones (numero_habitacion, piso, tipo) VALUES ('102', 1, 'Doble');
+            INSERT INTO Habitaciones (numero_habitacion, piso, tipo) VALUES ('201', 2, 'UCI');
+
+            INSERT INTO Camas (habitacion_id, numero_cama, estado) VALUES (1, 'Cama 01', 'Disponible');
+            INSERT INTO Camas (habitacion_id, numero_cama, estado) VALUES (2, 'Cama 01', 'Disponible');
+            INSERT INTO Camas (habitacion_id, numero_cama, estado) VALUES (2, 'Cama 02', 'Disponible');
+            INSERT INTO Camas (habitacion_id, numero_cama, estado) VALUES (3, 'Cama UCI-01', 'Disponible');
+        """)
+
     conn.commit()
     conn.close()
 
