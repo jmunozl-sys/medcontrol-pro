@@ -5,25 +5,242 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MedControl Pro - Asistente Clínico GPT</title>
 
+    <!-- Bootstrap 5 & Icons -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
 
+    <!-- Parser de Markdown (Marked.js) -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; }
-        .sidebar { min-height: 100vh; background-color: #1e293b; color: #fff; }
-        .sidebar .nav-link { color: #94a3b8; padding: 12px 20px; font-weight: 500; border-radius: 6px; margin: 2px 10px; cursor: pointer; text-decoration: none; display: block; }
-        .sidebar .nav-link:hover, .sidebar .nav-link.active { background-color: #0f172a; color: #38bdf8; }
-        .sidebar .brand { font-size: 1.4rem; font-weight: bold; color: #38bdf8; padding: 20px; text-align: center; }
-        .content-header { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 15px 30px; }
-        .chat-container { background: #fff; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; flex-direction: column; height: 72vh; }
-        .chat-mensajes { flex: 1; overflow-y: auto; padding: 20px; }
-        .msg { max-width: 75%; padding: 10px 14px; border-radius: 14px; margin-bottom: 12px; white-space: pre-wrap; line-height: 1.4; }
-        .msg-user { background: #2563eb; color: #fff; margin-left: auto; border-bottom-right-radius: 2px; }
-        .msg-bot { background: #f1f5f9; color: #0f172a; margin-right: auto; border-bottom-left-radius: 2px; }
-        .msg-error { background: #fee2e2; color: #991b1b; margin-right: auto; }
-        .chat-input-bar { border-top: 1px solid #e2e8f0; padding: 14px; display: flex; gap: 10px; }
-        .typing { color: #64748b; font-style: italic; font-size: .9rem; }
-        .aviso-legal { font-size: .78rem; color: #64748b; }
+        :root {
+            --sidebar-bg: #1e293b;
+            --sidebar-hover: #0f172a;
+            --accent-color: #38bdf8;
+            --user-msg-bg: #2563eb;
+            --bot-msg-bg: #ffffff;
+            --border-color: #e2e8f0;
+        }
+
+        body { 
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; 
+            background-color: #f8fafc; 
+            color: #1e293b;
+        }
+
+        .sidebar { 
+            min-height: 100vh; 
+            background-color: var(--sidebar-bg); 
+            color: #fff; 
+        }
+
+        .sidebar .nav-link { 
+            color: #94a3b8; 
+            padding: 12px 20px; 
+            font-weight: 500; 
+            border-radius: 8px; 
+            margin: 4px 12px; 
+            transition: all 0.2s ease;
+            text-decoration: none; 
+            display: flex;
+            align-items: center;
+        }
+
+        .sidebar .nav-link:hover, .sidebar .nav-link.active { 
+            background-color: var(--sidebar-hover); 
+            color: var(--accent-color); 
+        }
+
+        .sidebar .brand { 
+            font-size: 1.4rem; 
+            font-weight: 700; 
+            color: var(--accent-color); 
+            padding: 24px 20px; 
+            text-align: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .content-header { 
+            background: #fff; 
+            border-bottom: 1px solid var(--border-color); 
+            padding: 16px 32px; 
+        }
+
+        .chat-container { 
+            background: #fff; 
+            border-radius: 12px; 
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03); 
+            display: flex; 
+            flex-direction: column; 
+            height: calc(100vh - 140px); 
+        }
+
+        .chat-mensajes { 
+            flex: 1; 
+            overflow-y: auto; 
+            padding: 24px; 
+            background-color: #f8fafc;
+        }
+
+        .msg-wrapper {
+            display: flex;
+            margin-bottom: 20px;
+            gap: 12px;
+            align-items: flex-start;
+        }
+
+        .msg-wrapper.user {
+            flex-direction: row-reverse;
+        }
+
+        .avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            flex-shrink: 0;
+        }
+
+        .avatar-bot {
+            background-color: #e0f2fe;
+            color: #0284c7;
+        }
+
+        .avatar-user {
+            background-color: #1e293b;
+            color: #fff;
+        }
+
+        .msg { 
+            max-width: 80%; 
+            padding: 14px 18px; 
+            border-radius: 14px; 
+            font-size: 0.95rem;
+            line-height: 1.6; 
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        }
+
+        .msg-user { 
+            background: var(--user-msg-bg); 
+            color: #fff; 
+            border-top-right-radius: 2px; 
+        }
+
+        .msg-bot { 
+            background: var(--bot-msg-bg); 
+            color: #0f172a; 
+            border: 1px solid var(--border-color);
+            border-top-left-radius: 2px; 
+        }
+
+        .msg-error { 
+            background: #fef2f2; 
+            color: #991b1b; 
+            border: 1px solid #fecaca;
+        }
+
+        /* Formateo de Markdown dentro de las respuestas del bot */
+        .msg-bot h1, .msg-bot h2, .msg-bot h3, .msg-bot h4 {
+            font-weight: 700;
+            color: #0f172a;
+            margin-top: 14px;
+            margin-bottom: 8px;
+            font-size: 1.05rem;
+        }
+
+        .msg-bot h3 {
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 4px;
+            color: #1e3a8a;
+        }
+
+        .msg-bot p {
+            margin-bottom: 10px;
+        }
+
+        .msg-bot p:last-child {
+            margin-bottom: 0;
+        }
+
+        .msg-bot ul, .msg-bot ol {
+            margin-bottom: 10px;
+            padding-left: 20px;
+        }
+
+        .msg-bot li {
+            margin-bottom: 4px;
+        }
+
+        .msg-bot strong {
+            color: #1e293b;
+        }
+
+        .chat-input-bar { 
+            border-top: 1px solid var(--border-color); 
+            padding: 16px; 
+            background: #fff;
+            border-bottom-left-radius: 12px;
+            border-bottom-right-radius: 12px;
+        }
+
+        .suggestion-chips {
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            padding-bottom: 10px;
+            margin-bottom: 10px;
+        }
+
+        .chip {
+            background-color: #f1f5f9;
+            color: #475569;
+            border: 1px solid #e2e8f0;
+            border-radius: 20px;
+            padding: 6px 14px;
+            font-size: 0.82rem;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.2s ease;
+        }
+
+        .chip:hover {
+            background-color: #e2e8f0;
+            color: #0f172a;
+        }
+
+        /* Animación de tres puntos palpitantes */
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 8px 12px;
+        }
+
+        .typing-dot {
+            width: 7px;
+            height: 7px;
+            background-color: #94a3b8;
+            border-radius: 50%;
+            animation: typing 1.4s infinite ease-in-out;
+        }
+
+        .typing-dot:nth-child(1) { animation-delay: 0s; }
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 100% { transform: translateY(0); opacity: 0.4; }
+            50% { transform: translateY(-4px); opacity: 1; }
+        }
+
+        .aviso-legal { 
+            font-size: 0.8rem; 
+            color: #64748b; 
+        }
     </style>
 </head>
 <body>
@@ -32,35 +249,75 @@
     <div class="row">
         <!-- SIDEBAR -->
         <nav class="col-md-3 col-lg-2 sidebar d-md-block p-0">
-            <div class="brand"><i class="bi bi-hospital"></i> MedControl</div>
+            <div class="brand"><i class="bi bi-hospital me-2"></i>MedControl</div>
             <ul class="nav flex-column mt-3">
-                <li class="nav-item"><a class="nav-link" href="/"><i class="bi bi-speedometer2 me-2"></i> Dashboard Principal</a></li>
-                <li class="nav-item"><a class="nav-link" href="/ml/dashboard"><i class="bi bi-cpu me-2"></i> IA - Riesgo de Reingreso</a></li>
-                <li class="nav-item"><a class="nav-link active" href="/gpt/asistente"><i class="bi bi-robot me-2"></i> Asistente Clínico GPT</a></li>
+                <li class="nav-item">
+                    <a class="nav-link" href="/"><i class="bi bi-speedometer2 me-2"></i> Dashboard Principal</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="/ml/dashboard"><i class="bi bi-cpu me-2"></i> IA - Riesgo de Reingreso</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link active" href="/gpt/asistente"><i class="bi bi-robot me-2"></i> Asistente Clínico GPT</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="/gpt/multiagente"><i class="bi bi-people-fill me-2"></i> Junta Médica MAS</a>
+                </li>
             </ul>
         </nav>
 
-        <!-- CONTENIDO -->
+        <!-- CONTENIDO PRINCIPAL -->
         <main class="col-md-9 ms-sm-auto col-lg-10 px-0">
             <div class="content-header d-flex justify-content-between align-items-center">
-                <h4 class="m-0 fw-bold">Asistente Clínico (IA)</h4>
-                <span class="aviso-legal"><i class="bi bi-info-circle"></i> Apoyo a la decisión — no reemplaza el juicio médico</span>
+                <div class="d-flex align-items-center gap-3">
+                    <h4 class="m-0 fw-bold"><i class="bi bi-robot text-primary me-2"></i>Asistente Clínico (IA)</h4>
+                    <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">
+                        <i class="bi bi-circle-fill me-1" style="font-size: 0.5rem;"></i> GPT En Vivo
+                    </span>
+                </div>
+                <div class="d-flex align-items-center gap-3">
+                    <span class="aviso-legal"><i class="bi bi-shield-check me-1"></i> Apoyo a la decisión clínica — No reemplaza el juicio médico</span>
+                    <button id="btn-nueva-consulta" class="btn btn-sm btn-outline-secondary">
+                        <i class="bi bi-arrow-counterclockwise me-1"></i> Nueva Consulta
+                    </button>
+                </div>
             </div>
 
             <div class="p-4">
                 <div class="chat-container">
+                    <!-- ÁREA DE MENSAJES -->
                     <div id="chat-mensajes" class="chat-mensajes">
-                        <div class="msg msg-bot">
-                            Hola, soy el asistente clínico de apoyo de MedControl.
-                            Puedes describirme la sintomatología o los datos de un paciente
-                            y te daré un análisis preliminar, posibles diagnósticos diferenciales
-                            a considerar y recomendaciones generales.
+                        <div class="msg-wrapper bot">
+                            <div class="avatar avatar-bot"><i class="bi bi-robot"></i></div>
+                            <div class="msg msg-bot">
+                                <p><strong>Hola, soy el asistente clínico de MedControl.</strong></p>
+                                <p>Puedes describirme el cuadro clínico, síntomas o constantes vitales de un paciente para generar un diagnóstico diferencial preliminar, sugerencias de triaje o recomendaciones de manejo.</p>
+                            </div>
                         </div>
                     </div>
+
+                    <!-- BARRA DE ENTRADA -->
                     <div class="chat-input-bar">
-                        <textarea id="input-mensaje" class="form-control" rows="2"
-                                  placeholder="Ej: Paciente de 45 años, dolor torácico opresivo de 20 min, sudoración..."></textarea>
-                        <button id="btn-enviar" class="btn btn-primary px-4"><i class="bi bi-send"></i></button>
+                        <!-- Chips con ejemplos de consulta rápida -->
+                        <div class="suggestion-chips">
+                            <div class="chip" onclick="usarEjemplo('Paciente varón de 55 años, dolor torácico opresivo irradiado a brazo izquierdo, sudoración y disnea.')">
+                                🫀 Dolor Torácico Opresivo
+                            </div>
+                            <div class="chip" onclick="usarEjemplo('Paciente femenina de 32 años, cefalea pulsátil unilateral intensa con fotofobia y náuseas.')">
+                                🧠 Cefalea e Hipersensibilidad
+                            </div>
+                            <div class="chip" onclick="usarEjemplo('Análisis de triaje para paciente con PA 160/100 mmHg, FC 110 bpm, Temp 38.5°C y tos productiva.')">
+                                🩺 Interpretación de Triaje
+                            </div>
+                        </div>
+
+                        <div class="d-flex gap-2 align-items-end">
+                            <textarea id="input-mensaje" class="form-control" rows="2"
+                                      placeholder="Describe la sintomatología o realiza una consulta médica... (Presiona Enter para enviar)"></textarea>
+                            <button id="btn-enviar" class="btn btn-primary px-4 py-2" style="height: 58px;">
+                                <i class="bi bi-send-fill fs-5"></i>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -69,63 +326,143 @@
 </div>
 
 <script>
-const chatMensajes = document.getElementById('chat-mensajes');
-const inputMensaje = document.getElementById('input-mensaje');
-const btnEnviar = document.getElementById('btn-enviar');
+    // Configuración del parser de Markdown
+    marked.setOptions({
+        gfm: true,
+        breaks: true
+    });
 
-let historial = [];
+    const chatMensajes = document.getElementById('chat-mensajes');
+    const inputMensaje = document.getElementById('input-mensaje');
+    const btnEnviar = document.getElementById('btn-enviar');
+    const btnNuevaConsulta = document.getElementById('btn-nueva-consulta');
 
-function agregarMensaje(texto, tipo) {
-    const div = document.createElement('div');
-    div.className = 'msg ' + (tipo === 'user' ? 'msg-user' : tipo === 'error' ? 'msg-error' : 'msg-bot');
-    div.innerText = texto;
-    chatMensajes.appendChild(div);
-    chatMensajes.scrollTop = chatMensajes.scrollHeight;
-    return div;
-}
+    let historial = [];
 
-async function enviarMensaje() {
-    const texto = inputMensaje.value.trim();
-    if (!texto) return;
+    // Función para agregar mensajes a la pantalla
+    function agregarMensaje(texto, tipo) {
+        const wrapper = document.createElement('div');
+        wrapper.className = `msg-wrapper ${tipo}`;
 
-    agregarMensaje(texto, 'user');
-    historial.push({ role: 'user', content: texto });
-    inputMensaje.value = '';
-    btnEnviar.disabled = true;
+        const avatar = document.createElement('div');
+        avatar.className = `avatar ${tipo === 'user' ? 'avatar-user' : 'avatar-bot'}`;
+        avatar.innerHTML = tipo === 'user' ? '<i class="bi bi-person-fill"></i>' : '<i class="bi bi-robot"></i>';
 
-    const indicador = agregarMensaje('Escribiendo...', 'bot');
-    indicador.classList.add('typing');
+        const divMsg = document.createElement('div');
+        divMsg.className = `msg ${tipo === 'user' ? 'msg-user' : tipo === 'error' ? 'msg-error' : 'msg-bot'}`;
 
-    try {
-        const res = await fetch('/gpt/asistente', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mensaje: texto, historial: historial.slice(-10) })
-        });
-        const data = await res.json();
-        indicador.remove();
-
-        if (!res.ok) {
-            agregarMensaje(data.error || 'Ocurrió un error al consultar al asistente.', 'error');
-            return;
+        if (tipo === 'bot') {
+            // Convierte el Markdown en HTML renderizado
+            divMsg.innerHTML = marked.parse(texto || '');
+        } else {
+            divMsg.textContent = texto;
         }
-        agregarMensaje(data.respuesta, 'bot');
-        historial.push({ role: 'assistant', content: data.respuesta });
-    } catch (err) {
-        indicador.remove();
-        agregarMensaje('No se pudo conectar con el asistente: ' + err.message, 'error');
-    } finally {
-        btnEnviar.disabled = false;
-    }
-}
 
-btnEnviar.addEventListener('click', enviarMensaje);
-inputMensaje.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        enviarMensaje();
+        wrapper.appendChild(avatar);
+        wrapper.appendChild(divMsg);
+        chatMensajes.appendChild(wrapper);
+
+        // Desplazamiento automático al final
+        chatMensajes.scrollTop = chatMensajes.scrollHeight;
+        return wrapper;
     }
-});
+
+    // Indicador animado mientras la IA procesa
+    function mostrarIndicador() {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'msg-wrapper bot';
+        wrapper.id = 'typing-indicator-wrapper';
+
+        const avatar = document.createElement('div');
+        avatar.className = 'avatar avatar-bot';
+        avatar.innerHTML = '<i class="bi bi-robot"></i>';
+
+        const divMsg = document.createElement('div');
+        divMsg.className = 'msg msg-bot';
+        divMsg.innerHTML = `
+            <div class="typing-indicator">
+                <span class="typing-dot"></span>
+                <span class="typing-dot"></span>
+                <span class="typing-dot"></span>
+            </div>
+        `;
+
+        wrapper.appendChild(avatar);
+        wrapper.appendChild(divMsg);
+        chatMensajes.appendChild(wrapper);
+        chatMensajes.scrollTop = chatMensajes.scrollHeight;
+        return wrapper;
+    }
+
+    // Envío del mensaje al servidor
+    async function enviarMensaje() {
+        const texto = inputMensaje.value.trim();
+        if (!texto) return;
+
+        agregarMensaje(texto, 'user');
+        historial.push({ role: 'user', content: texto });
+        inputMensaje.value = '';
+        btnEnviar.disabled = true;
+
+        const indicador = mostrarIndicador();
+
+        try {
+            const res = await fetch('/gpt/asistente', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mensaje: texto, historial: historial.slice(-10) })
+            });
+
+            const data = await res.json();
+            indicador.remove();
+
+            if (!res.ok) {
+                agregarMensaje(data.error || 'Ocurrió un error al consultar al asistente.', 'error');
+                return;
+            }
+
+            agregarMensaje(data.respuesta, 'bot');
+            historial.push({ role: 'assistant', content: data.respuesta });
+
+        } catch (err) {
+            indicador.remove();
+            agregarMensaje('No se pudo conectar con el servidor: ' + err.message, 'error');
+        } finally {
+            btnEnviar.disabled = false;
+            inputMensaje.focus();
+        }
+    }
+
+    // Función para chips de recomendación rápida
+    function usarEjemplo(texto) {
+        inputMensaje.value = texto;
+        inputMensaje.focus();
+    }
+
+    // Eventos
+    btnEnviar.addEventListener('click', enviarMensaje);
+
+    inputMensaje.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            enviarMensaje();
+        }
+    });
+
+    btnNuevaConsulta.addEventListener('click', () => {
+        historial = [];
+        chatMensajes.innerHTML = `
+            <div class="msg-wrapper bot">
+                <div class="avatar avatar-bot"><i class="bi bi-robot"></i></div>
+                <div class="msg msg-bot">
+                    <p><strong>Consulta reiniciada.</strong></p>
+                    <p>¿En qué puedo ayudarte con el siguiente paciente?</p>
+                </div>
+            </div>
+        `;
+        inputMensaje.value = '';
+        inputMensaje.focus();
+    });
 </script>
 </body>
 </html>

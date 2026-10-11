@@ -1,13 +1,31 @@
+import io
 import os
 import sqlite3
+import smtplib
+import urllib.parse
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, current_app
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+from flask import Flask, render_template, request, jsonify, current_app, send_file
 import requests
 from dotenv import load_dotenv
+
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 load_dotenv()
 
 app = Flask(__name__)
+
+# Registrar Blueprint de Machine Learning / IA
+try:
+    from blueprint_ml_gpt import ml_gpt_bp
+    app.register_blueprint(ml_gpt_bp)
+except Exception as e:
+    print(f"Aviso al cargar Blueprint ML/GPT: {e}")
 
 # ==========================================
 # CONFIGURACIÓN DE CONEXIÓN A SQLITE
@@ -63,6 +81,7 @@ def db_query_get_id(query, params=()):
     finally:
         if conn:
             conn.close()
+
 
 def init_sqlite_db():
     """Crea la estructura de tablas e inserta datos iniciales si no existen."""
@@ -226,9 +245,6 @@ def init_sqlite_db():
         );
     """)
 
-    # ==============================================================
-    # INSERTAR ESPECIALIDADES DE PRUEBA SI LA TABLA ESTÁ VACÍA
-    # ==============================================================
     cursor.execute("SELECT COUNT(*) FROM Especialidades")
     if cursor.fetchone()[0] == 0:
         especialidades_iniciales = [
@@ -249,9 +265,6 @@ def init_sqlite_db():
             INSERT INTO Especialidades (nombre, descripcion) VALUES (?, ?)
         """, especialidades_iniciales)
 
-    # ==============================================================
-    # INSERTAR HABITACIONES Y CAMAS SI ESTÁN VACÍAS (PARA HOSPITALIZACIÓN)
-    # ==============================================================
     cursor.execute("SELECT COUNT(*) FROM Habitaciones")
     if cursor.fetchone()[0] == 0:
         cursor.executescript("""
@@ -269,31 +282,24 @@ def init_sqlite_db():
     conn.close()
 
 
-# Inicializar la base de datos SQLite al arrancar la aplicación
 init_sqlite_db()
 
-# ---- INICIO: Módulo ML + GPT ----
 try:
     import ml_store
     ml_store.configurar(lambda: get_db_connection())
-    from blueprint_ml_gpt import ml_gpt_bp
-    app.register_blueprint(ml_gpt_bp)
 except Exception as e:
-    print(f"Aviso al cargar módulo ML/GPT: {e}")
-# ---- FIN: Módulo ML + GPT ----
+    print(f"Aviso al configurar ml_store: {e}")
 
 
 # ==========================================
-# RUTA PRINCIPAL
+# RUTA PRINCIPAL & CONSULTA RENIEC
 # ==========================================
 @app.route('/')
 def index():
-    return render_template('index.html')
+    modelo_disponible = os.path.exists('modelo_riesgo.pkl') or os.path.exists('modelo_riesgo.joblib')
+    return render_template('index.html', modelo_disponible=modelo_disponible)
 
 
-# ==========================================
-# API CONSULTA RENIEC EN TIEMPO REAL
-# ==========================================
 @app.route('/api/reniec/<dni>', methods=['GET'])
 def buscar_reniec(dni):
     if len(dni) != 8 or not dni.isdigit():
@@ -352,9 +358,6 @@ def buscar_reniec(dni):
     return jsonify({'error': 'No se encontraron datos para el DNI especificado.'}), 404
 
 
-# ==========================================
-# API DASHBOARD
-# ==========================================
 @app.route('/api/dashboard', methods=['GET'])
 def get_dashboard():
     try:
@@ -448,7 +451,7 @@ def delete_paciente(id):
 
 
 # ==========================================
-# 2. MÓDULO ESPECIALIDADES
+# 2. MÓDULO ESPECIALIDADES & PERSONAL MÉDICO
 # ==========================================
 @app.route('/api/especialidades', methods=['GET'])
 def get_especialidades():
@@ -459,9 +462,6 @@ def get_especialidades():
         return jsonify({'error': str(e)}), 500
 
 
-# ==========================================
-# 3. MÓDULO PERSONAL MÉDICO
-# ==========================================
 @app.route('/api/medicos', methods=['GET'])
 def get_medicos():
     try:
@@ -521,7 +521,7 @@ def delete_medico(id):
 
 
 # ==========================================
-# 4. MÓDULO CITAS MÉDICAS
+# 3. MÓDULO CITAS MÉDICAS
 # ==========================================
 @app.route('/api/citas', methods=['GET'])
 def get_citas():
@@ -575,7 +575,7 @@ def delete_cita(id):
 
 
 # ==========================================
-# 5. MÓDULO TRIAJE
+# 4. MÓDULO TRIAJE
 # ==========================================
 @app.route('/api/triaje', methods=['GET'])
 def get_triaje():
@@ -605,7 +605,7 @@ def save_triaje():
         imc = round(peso / (talla_m * talla_m), 2) if talla_m > 0 else 0
 
         cita_id = data.get('cita_id')
-        cita_row = db_query("SELECT paciente_id FROM CitasMedicas WHERE id=?", (cita_id,))
+        cita_row = db_query("SELECT paciente_id FROM CitasMedicas WHERE id=?", (cita_id,)) if cita_id else []
         paciente_id = cita_row[0]['paciente_id'] if cita_row else data.get('paciente_id')
 
         if t_id:
@@ -642,7 +642,7 @@ def delete_triaje(id):
 
 
 # ==========================================
-# 6. MÓDULO HISTORIAL CLÍNICO
+# 5. MÓDULO HISTORIAL CLÍNICO
 # ==========================================
 @app.route('/api/historial', methods=['GET'])
 def get_historial():
@@ -670,11 +670,12 @@ def save_historial():
         h_id = data.get('id')
         cita_id = data.get('cita_id')
 
-        cita_row = db_query("SELECT paciente_id, medico_id FROM CitasMedicas WHERE id=?", (cita_id,))
-        if not cita_row:
+        cita_row = db_query("SELECT paciente_id, medico_id FROM CitasMedicas WHERE id=?", (cita_id,)) if cita_id else []
+        if cita_id and not cita_row:
             return jsonify({'error': 'La cita seleccionada no existe'}), 400
-        paciente_id = cita_row[0]['paciente_id']
-        medico_id = cita_row[0]['medico_id']
+            
+        paciente_id = cita_row[0]['paciente_id'] if cita_row else data.get('paciente_id')
+        medico_id = cita_row[0]['medico_id'] if cita_row else data.get('medico_id')
 
         if h_id:
             db_query("""
@@ -691,7 +692,8 @@ def save_historial():
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (cita_id, paciente_id, medico_id, data.get('sintomas'), data.get('diagnostico'),
                   data.get('cie10'), data.get('tratamiento')))
-            db_query("UPDATE CitasMedicas SET estado='Atendido' WHERE id=?", (cita_id,), commit=True, fetch=False)
+            if cita_id:
+                db_query("UPDATE CitasMedicas SET estado='Atendido' WHERE id=?", (cita_id,), commit=True, fetch=False)
             return jsonify({'message': 'Historial clínico guardado exitosamente', 'id': new_id})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -707,7 +709,7 @@ def delete_historial(id):
 
 
 # ==========================================
-# 7. MÓDULO CAJA Y FACTURACIÓN
+# 6. MÓDULO CAJA Y FACTURACIÓN
 # ==========================================
 @app.route('/api/facturacion', methods=['GET'])
 def get_facturacion():
@@ -767,8 +769,117 @@ def delete_facturacion(id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/facturacion/<int:comprobante_id>/pdf', methods=['GET'])
+def descargar_boleta_pdf(comprobante_id):
+    try:
+        rows = db_query("""
+            SELECT c.*, p.nombre, p.apellido, p.dni, p.direccion, p.telefono, p.email
+            FROM ComprobantesFacturacion c
+            LEFT JOIN Pacientes p ON c.paciente_id = p.id
+            WHERE c.id = ?
+        """, (comprobante_id,))
+
+        if not rows:
+            return jsonify({"error": "Comprobante no encontrado"}), 404
+
+        comp = rows[0]
+
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+        story = []
+        styles = getSampleStyleSheet()
+
+        style_title = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontSize=18, textColor=colors.HexColor("#0d6efd"))
+        style_subtitle = ParagraphStyle('SubTitleStyle', parent=styles['Normal'], fontSize=10, textColor=colors.gray)
+        style_bold = ParagraphStyle('BoldStyle', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=10)
+        style_normal = ParagraphStyle('NormalStyle', parent=styles['Normal'], fontSize=10)
+
+        story.append(Paragraph("<b>MedControl - Centro Médico</b>", style_title))
+        story.append(Paragraph("RUC: 20601234567 | Av. Principal 123, Lima", style_subtitle))
+        story.append(Paragraph("Teléfono: (01) 456-7890 | Email: contacto@medcontrol.pe", style_subtitle))
+        story.append(Spacer(1, 15))
+
+        serie = comp.get('numero_serie') or 'B001'
+        correlativo = comp.get('numero_correlativo') or str(comp.get('id', 1)).zfill(6)
+        tipo_doc = (comp.get('tipo_comprobante') or 'BOLETA DE VENTA').upper()
+        numero_doc = f"{serie}-{correlativo}"
+
+        tabla_header = [
+            [Paragraph(f"<b>{tipo_doc} ELECTRÓNICA</b><br/><b>N° {numero_doc}</b>", ParagraphStyle('DocHeader', parent=styles['Heading2'], alignment=1, textColor=colors.HexColor("#0d6efd")))]
+        ]
+        t_header = Table(tabla_header, colWidths=[540])
+        t_header.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8f9fa")),
+            ('BOX', (0, 0), (-1, -1), 1, colors.HexColor("#0d6efd")),
+            ('PADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(t_header)
+        story.append(Spacer(1, 15))
+
+        nombre_paciente = f"{comp.get('nombre') or ''} {comp.get('apellido') or ''}".strip() or "CLIENTE VARIOS"
+        datos_cliente = [
+            [Paragraph("<b>Paciente:</b>", style_bold), Paragraph(nombre_paciente, style_normal),
+             Paragraph("<b>Fecha:</b>", style_bold), Paragraph(str(comp.get('fecha_emision') or '-'), style_normal)],
+            [Paragraph("<b>DNI:</b>", style_bold), Paragraph(str(comp.get('dni') or '-'), style_normal),
+             Paragraph("<b>Método de Pago:</b>", style_bold), Paragraph(str(comp.get('metodo_pago') or 'Efectivo'), style_normal)],
+            [Paragraph("<b>Dirección:</b>", style_bold), Paragraph(str(comp.get('direccion') or 'Ciudad'), style_normal),
+             Paragraph("<b>Estado:</b>", style_bold), Paragraph(str(comp.get('estado') or 'Emitido'), style_normal)]
+        ]
+        t_cliente = Table(datos_cliente, colWidths=[80, 190, 100, 170])
+        t_cliente.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
+        story.append(t_cliente)
+        story.append(Spacer(1, 20))
+
+        monto_total = float(comp.get('monto_total') or 0.0)
+        monto_subtotal = float(comp.get('monto_subtotal') or (monto_total / 1.18))
+        monto_igv = float(comp.get('monto_igv') or (monto_total - monto_subtotal))
+
+        tabla_detalle = [
+            [Paragraph("<b>Cant.</b>", style_bold), Paragraph("<b>Descripción / Servicio</b>", style_bold), Paragraph("<b>P. Unit (S/)</b>", style_bold), Paragraph("<b>Total (S/)</b>", style_bold)],
+            ["1", "Atención Médica / Consulta Especializada", f"{monto_subtotal:.2f}", f"{monto_subtotal:.2f}"]
+        ]
+        t_detalle = Table(tabla_detalle, colWidths=[50, 290, 100, 100])
+        t_detalle.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#e9ecef")),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#dee2e6")),
+            ('ALIGN', (2, 0), (-1, -1), 'RIGHT'),
+            ('PADDING', (0, 0), (-1, -1), 6)
+        ]))
+        story.append(t_detalle)
+        story.append(Spacer(1, 15))
+
+        tabla_totales = [
+            ["", Paragraph("<b>OP. GRAVADA:</b>", style_bold), f"S/ {monto_subtotal:.2f}"],
+            ["", Paragraph("<b>IGV (18%):</b>", style_bold), f"S/ {monto_igv:.2f}"],
+            ["", Paragraph("<b>TOTAL A PAGAR:</b>", style_bold), f"S/ {monto_total:.2f}"]
+        ]
+        t_totales = Table(tabla_totales, colWidths=[240, 150, 150])
+        t_totales.setStyle(TableStyle([
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+            ('PADDING', (0, 0), (-1, -1), 4),
+            ('LINEABOVE', (1, 2), (2, 2), 1, colors.HexColor("#0d6efd"))
+        ]))
+        story.append(t_totales)
+        story.append(Spacer(1, 30))
+
+        story.append(Paragraph("<center><i>Gracias por confiar en MedControl. Conservar esta boleta para cualquier reclamo.</i></center>", style_subtitle))
+
+        doc.build(story)
+        buffer.seek(0)
+
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f"Boleta_{numero_doc}.pdf",
+            mimetype='application/pdf'
+        )
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ==========================================
-# 8. MÓDULO FARMACIA
+# 7. MÓDULO FARMACIA
 # ==========================================
 @app.route('/api/farmacia', methods=['GET'])
 def get_farmacia():
@@ -817,7 +928,7 @@ def delete_farmacia(id):
 
 
 # ==========================================
-# 9. MÓDULO LABORATORIO
+# 8. MÓDULO LABORATORIO
 # ==========================================
 @app.route('/api/laboratorio', methods=['GET'])
 def get_laboratorio():
@@ -870,7 +981,7 @@ def delete_laboratorio(id):
 
 
 # ==========================================
-# 10. MÓDULO HOSPITALIZACIÓN
+# 9. MÓDULO HOSPITALIZACIÓN
 # ==========================================
 @app.route('/api/camas-disponibles', methods=['GET'])
 def get_camas_disponibles():
@@ -966,8 +1077,39 @@ def delete_hospitalizacion(id):
 
 
 # ==========================================
-# 11. MÓDULO NOTIFICACIONES
+# 10. MÓDULO NOTIFICACIONES
 # ==========================================
+GMAIL_USER = os.getenv('GMAIL_USER', 'jmunozl@undac.edu.pe')
+GMAIL_PASS = os.getenv('GMAIL_PASS', 'wncrgswlbpejtswr')
+
+
+def enviar_correo_smtp(destinatario, asunto, mensaje):
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = f"MedControl Pro <{GMAIL_USER}>"
+        msg['To'] = destinatario
+        msg['Subject'] = asunto
+        
+        html_content = f"""
+        <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; max-width: 600px;">
+            <h3 style="color: #0d6efd; margin-top: 0;">MedControl Pro - Notificación</h3>
+            <p style="font-size: 15px; color: #333;">{mensaje.replace('\n', '<br>')}</p>
+            <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+            <small style="color: #888;">Este es un mensaje automático emitido por el sistema MedControl Pro.</small>
+        </div>
+        """
+        msg.attach(MIMEText(html_content, 'html'))
+
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(GMAIL_USER, GMAIL_PASS)
+        server.sendmail(GMAIL_USER, destinatario, msg.as_string())
+        server.quit()
+        return True, "Enviado con éxito"
+    except Exception as e:
+        return False, str(e)
+
+
 @app.route('/api/notificaciones', methods=['GET'])
 def get_notificaciones():
     try:
@@ -984,11 +1126,65 @@ def get_notificaciones():
 def save_notificacion():
     try:
         data = request.json or {}
+        canal = data.get('canal') or data.get('tipo') or 'Email'
+        email = data.get('email') or data.get('destinatario') or ''
+        telefono = data.get('telefono') or ''
+        asunto = data.get('asunto') or ''
+        mensaje = data.get('mensaje') or ''
+
+        destinatario_registro = email
+        if canal == 'WhatsApp' and telefono:
+            destinatario_registro = f"WA: {telefono}"
+        elif canal == 'Ambos':
+            destinatario_registro = f"{email} / WA: {telefono}"
+
+        estado_envio = 1
+        error_msg = ""
+        if canal in ['Email', 'Ambos'] and email:
+            exito, msg = enviar_correo_smtp(email, asunto, mensaje)
+            if not exito:
+                estado_envio = 0
+                error_msg = msg
+
+        whatsapp_url = ""
+        if canal in ['WhatsApp', 'Ambos'] and telefono:
+            num_clean = ''.join(filter(str.isdigit, str(telefono)))
+            if len(num_clean) == 9:
+                num_clean = '51' + num_clean
+            
+            texto_wa = f"*{asunto}*\n\n{mensaje}"
+            texto_encoded = urllib.parse.quote(texto_wa)
+            whatsapp_url = f"https://web.whatsapp.com/send?phone={num_clean}&text={texto_encoded}"
+
         new_id = db_query_get_id("""
             INSERT INTO Notificaciones (destinatario_email, asunto, mensaje, tipo, enviado)
-            VALUES (?, ?, ?, 'Email', 1)
-        """, (data.get('email'), data.get('asunto'), data.get('mensaje')))
-        return jsonify({'message': 'Notificación enviada y registrada exitosamente', 'id': new_id})
+            VALUES (?, ?, ?, ?, ?)
+        """, (destinatario_registro, asunto, mensaje, canal, estado_envio))
+
+        return jsonify({
+            'message': 'Notificación procesada y registrada exitosamente',
+            'id': new_id,
+            'whatsapp_url': whatsapp_url,
+            'error': error_msg
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/notificaciones/<int:id>', methods=['PUT'])
+def update_notificacion(id):
+    try:
+        data = request.json or {}
+        asunto = data.get('asunto') or ''
+        mensaje = data.get('mensaje') or ''
+
+        db_query("""
+            UPDATE Notificaciones 
+            SET asunto = ?, mensaje = ?
+            WHERE id = ?
+        """, (asunto, mensaje, id), commit=True)
+
+        return jsonify({'message': 'Notificación actualizada correctamente'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

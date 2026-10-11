@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MedControl Pro - Sistema de Gestión Hospitalaria</title>
 
+    <!-- Hojas de Estilo Externas -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" rel="stylesheet">
-    <!-- Leaflet (mapa OpenStreetMap, gratuito, sin API key) -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
     <style>
@@ -25,13 +25,32 @@
         .autocomplete-list { position: absolute; z-index: 2000; background: #fff; border: 1px solid #ddd; width: 100%; max-height: 200px; overflow-y: auto; border-radius: 0 0 6px 6px; box-shadow: 0 4px 8px rgba(0,0,0,.1); }
         .autocomplete-list div { padding: 8px 12px; cursor: pointer; font-size: .9rem; }
         .autocomplete-list div:hover { background: #f1f5f9; }
+
+        /* Estilos Módulo Machine Learning */
+        .metric-card h2 { font-weight: 700; }
+        .progress { height: 28px; border-radius: 14px; }
+        .progress-bar { font-weight: 600; font-size: .95rem; }
+        .live-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #dc3545; margin-right: 6px; animation: pulso 1.4s infinite; }
+        .live-dot.off { background: #94a3b8; animation: none; }
+        @keyframes pulso { 0% { box-shadow: 0 0 0 0 rgba(220,53,69,.6); } 70% { box-shadow: 0 0 0 8px rgba(220,53,69,0); } 100% { box-shadow: 0 0 0 0 rgba(220,53,69,0); } }
+        .cm { width: 100%; max-width: 480px; margin: 0 auto; border-collapse: separate; border-spacing: 6px; text-align: center; }
+        .cm th { font-weight: 600; color: #475569; font-size: .85rem; padding: 4px; }
+        .cm td.celda { border-radius: 10px; padding: 20px 6px; color: #fff; transition: background .3s; }
+        .cm td.celda .n { font-size: 2rem; font-weight: 700; line-height: 1; }
+        .cm td.celda .p { font-size: .8rem; opacity: .95; }
+        .cm td.celda .l { font-size: .72rem; opacity: .85; }
+        .celda.tn, .celda.tp { background: #198754; }
+        .celda.fp, .celda.fn { background: #dc3545; }
+        .cm.vacio td.celda { background: #cbd5e1; }
+        .tabla-pred td, .tabla-pred th { font-size: .85rem; vertical-align: middle; }
+        .nota-fuente { font-size: .8rem; }
     </style>
 </head>
 <body>
 
 <div class="container-fluid">
     <div class="row">
-        <!-- SIDEBAR -->
+        <!-- MENÚ LATERAL (SIDEBAR) -->
         <nav class="col-md-3 col-lg-2 sidebar d-md-block p-0">
             <div class="brand"><i class="bi bi-hospital"></i> MedControl</div>
             <ul class="nav flex-column mt-3" id="menu-items">
@@ -46,11 +65,10 @@
                 <li class="nav-item"><a class="nav-link" data-sec="laboratorio"><i class="bi bi-droplet me-2"></i> Laboratorio</a></li>
                 <li class="nav-item"><a class="nav-link" data-sec="hospitalizacion"><i class="bi bi-journal-plus me-2"></i> Hospitalización</a></li>
                 <li class="nav-item"><a class="nav-link" data-sec="notificaciones"><i class="bi bi-envelope me-2"></i> Notificaciones</a></li>
+                <li class="nav-item"><a class="nav-link" data-sec="ml-dashboard"><i class="bi bi-cpu me-2"></i> IA - Riesgo de Reingreso</a></li>
             </ul>
-            <!-- Enlaces a módulos independientes (páginas reales, fuera del router SPA de arriba) -->
             <ul class="nav flex-column mt-2">
                 <li class="nav-item px-3"><hr class="text-secondary my-1"></li>
-                <li class="nav-item"><a class="nav-link" href="/ml/dashboard"><i class="bi bi-cpu me-2"></i> IA - Riesgo de Reingreso</a></li>
                 <li class="nav-item"><a class="nav-link" href="/gpt/asistente"><i class="bi bi-robot me-2"></i> Asistente Clínico GPT</a></li>
             </ul>
         </nav>
@@ -89,7 +107,7 @@
                     </div>
                     <div class="card card-dash p-3">
                         <h5 class="fw-bold mb-2"><i class="bi bi-geo-alt"></i> Ubicación de pacientes registrados</h5>
-                        <p class="text-muted small mb-2">Mapa generado con OpenStreetMap + Leaflet (gratuito). Los pacientes con dirección geolocalizada aparecen como marcadores.</p>
+                        <p class="text-muted small mb-2">Mapa generado con OpenStreetMap + Leaflet. Los pacientes geolocalizados aparecen en el mapa.</p>
                         <div id="mapa-dashboard"></div>
                     </div>
                 </div>
@@ -247,22 +265,217 @@
                         </div>
                         <table class="table table-hover align-middle" id="tabla-notificaciones">
                             <thead class="table-light">
-                                <tr><th>ID</th><th>Destinatario</th><th>Asunto</th><th>Mensaje</th><th>Fecha</th><th class="text-center">Acciones</th></tr>
+                                <tr><th>ID</th><th>Canal</th><th>Destinatario / Teléfono</th><th>Asunto</th><th>Mensaje</th><th>Estado</th><th>Fecha</th><th class="text-center">Acciones</th></tr>
                             </thead>
                             <tbody></tbody>
                         </table>
                     </div>
+                </div>
+
+                <!-- 12. MACHINE LEARNING (IA) -->
+                <div id="sec-ml-dashboard" class="modulo-sec d-none">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3 pb-2 border-bottom">
+                        <h4 class="m-0 fw-bold"><i class="bi bi-cpu text-primary me-2"></i>Inteligencia Artificial — Riesgo de Reingreso</h4>
+                        <div class="d-flex gap-2">
+                            <a href="/ml/exportar-predicciones" class="btn btn-outline-secondary btn-sm"><i class="bi bi-file-earmark-spreadsheet me-1"></i> Exportar predicciones</a>
+                            <a href="/ml/exportar-csv" class="btn btn-outline-primary btn-sm"><i class="bi bi-download me-1"></i> Descargar Dataset</a>
+                        </div>
+                    </div>
+
+                    {% if not modelo_disponible %}
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                        Aún no se ha entrenado el modelo. Ejecuta en la terminal: <code>python generar_dataset.py</code> y <code>python entrenar_modelo.py</code>.
+                    </div>
+                    {% else %}
+
+                    <div id="aviso-global"></div>
+
+                    <div class="card card-dash p-3 mb-3">
+                        <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                            <div class="btn-group" role="group">
+                                <input type="radio" class="btn-check" name="fuente" id="fuente-vivo" value="vivo" checked>
+                                <label class="btn btn-outline-primary btn-sm" for="fuente-vivo"><i class="bi bi-broadcast me-1"></i> En vivo</label>
+                                <input type="radio" class="btn-check" name="fuente" id="fuente-validacion" value="validacion">
+                                <label class="btn btn-outline-primary btn-sm" for="fuente-validacion"><i class="bi bi-mortarboard me-1"></i> Validación</label>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <label class="small text-muted mb-0">Origen:</label>
+                                <select id="filtro-origen" class="form-select form-select-sm" style="width:auto">
+                                    <option value="todos">Todos</option>
+                                    <option value="sistema">Sistema</option>
+                                    <option value="simulacion">Simulación</option>
+                                </select>
+                            </div>
+                            <div class="small text-muted"><span class="live-dot" id="live-dot"></span><span id="estado-live">Conectando…</span></div>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mb-4">
+                        <div class="col-md-3 col-6"><div class="card card-dash bg-primary text-white p-3 metric-card"><h6>Accuracy</h6><h2 id="m-accuracy">—</h2></div></div>
+                        <div class="col-md-3 col-6"><div class="card card-dash bg-success text-white p-3 metric-card"><h6>Precision</h6><h2 id="m-precision">—</h2></div></div>
+                        <div class="col-md-3 col-6"><div class="card card-dash bg-warning text-dark p-3 metric-card"><h6>Recall</h6><h2 id="m-recall">—</h2></div></div>
+                        <div class="col-md-3 col-6"><div class="card card-dash bg-info text-white p-3 metric-card"><h6>F1-Score</h6><h2 id="m-f1">—</h2></div></div>
+                    </div>
+
+                    <div class="row g-4 mb-4">
+                        <div class="col-lg-6">
+                            <div class="card card-dash p-3 h-100">
+                                <h5 class="fw-bold mb-1"><i class="bi bi-grid-3x3 me-2"></i> Matriz de Confusión <span class="badge bg-secondary fw-normal" id="badge-fuente">—</span></h5>
+                                <p class="text-muted nota-fuente mb-3" id="detalle-matriz">Cargando…</p>
+                                <table class="cm vacio" id="cm">
+                                    <tr><th></th><th colspan="2">PREDICCIÓN</th></tr>
+                                    <tr><th></th><th>Bajo riesgo</th><th>Alto riesgo</th></tr>
+                                    <tr>
+                                        <th class="text-end">REAL<br>Bajo riesgo</th>
+                                        <td class="celda tn"><div class="n" id="c-tn">0</div><div class="p" id="p-tn"></div><div class="l">TN</div></td>
+                                        <td class="celda fp"><div class="n" id="c-fp">0</div><div class="p" id="p-fp"></div><div class="l">FP</div></td>
+                                    </tr>
+                                    <tr>
+                                        <th class="text-end">REAL<br>Alto riesgo</th>
+                                        <td class="celda fn"><div class="n" id="c-fn">0</div><div class="p" id="p-fn"></div><div class="l">FN</div></td>
+                                        <td class="celda tp"><div class="n" id="c-tp">0</div><div class="p" id="p-tp"></div><div class="l">TP</div></td>
+                                    </tr>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="col-lg-6">
+                            <div class="card card-dash p-3 h-100">
+                                <h5 class="fw-bold mb-3"><i class="bi bi-activity me-2"></i> Predicción de Riesgo</h5>
+                                <form id="form-predict">
+                                    <!-- PACIENTE DE LA BD O SELECCIÓN MANUAL -->
+                                    <div class="mb-2">
+                                        <label for="paciente_id" class="form-label small text-muted mb-1">Paciente del Sistema</label>
+                                        <select class="form-select" id="paciente_id">
+                                            <option value="">— Selección Manual (o elija un paciente) —</option>
+                                        </select>
+                                        <div id="info-paciente" class="form-text"></div>
+                                    </div>
+
+                                    <!-- EDAD Y TRIAJE -->
+                                    <div class="row g-2 mb-2">
+                                        <div class="col-6">
+                                            <label for="edad" class="form-label small text-muted mb-1">Edad (años)</label>
+                                            <input type="number" class="form-control" id="edad" value="55" placeholder="Edad" min="0" max="120" required>
+                                        </div>
+                                        <div class="col-6">
+                                            <label for="nivel_triaje" class="form-label small text-muted mb-1">Nivel de Triaje</label>
+                                            <select class="form-select" id="nivel_triaje" required>
+                                                <option value="1">1 - Emergencia</option>
+                                                <option value="2">2 - Muy urgente</option>
+                                                <option value="3" selected>3 - Urgente</option>
+                                                <option value="4">4 - Poco urgente</option>
+                                                <option value="5">5 - No urgente</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <!-- PRESIÓN ARTERIAL -->
+                                    <div class="row g-2 mb-2">
+                                        <div class="col-6">
+                                            <label for="presion_sistolica" class="form-label small text-muted mb-1">P. Sistólica (mmHg)</label>
+                                            <input type="number" class="form-control" id="presion_sistolica" value="125" placeholder="P. Sistólica" required>
+                                        </div>
+                                        <div class="col-6">
+                                            <label for="presion_diastolica" class="form-label small text-muted mb-1">P. Diastólica (mmHg)</label>
+                                            <input type="number" class="form-control" id="presion_diastolica" value="80" placeholder="P. Diastólica" required>
+                                        </div>
+                                    </div>
+
+                                    <!-- FRECUENCIA CARDÍACA Y GLUCOSA -->
+                                    <div class="row g-2 mb-2">
+                                        <div class="col-6">
+                                            <label for="frecuencia_cardiaca" class="form-label small text-muted mb-1">F. Cardíaca (lpm)</label>
+                                            <input type="number" class="form-control" id="frecuencia_cardiaca" value="80" placeholder="F. Cardíaca" required>
+                                        </div>
+                                        <div class="col-6">
+                                            <label for="glucosa" class="form-label small text-muted mb-1">Glucosa (mg/dL)</label>
+                                            <input type="number" class="form-control" id="glucosa" value="100" placeholder="Glucosa" required>
+                                        </div>
+                                    </div>
+
+                                    <!-- TEMPERATURA Y COMORBILIDADES -->
+                                    <div class="row g-2 mb-3">
+                                        <div class="col-6">
+                                            <label for="temperatura" class="form-label small text-muted mb-1">Temperatura (°C)</label>
+                                            <input type="number" step="0.1" class="form-control" id="temperatura" value="36.7" placeholder="Temp (°C)" required>
+                                        </div>
+                                        <div class="col-6">
+                                            <label for="comorbilidades" class="form-label small text-muted mb-1">N° Comorbilidades</label>
+                                            <input type="number" class="form-control" id="comorbilidades" value="0" placeholder="Comorbilidades" min="0" max="10" required>
+                                        </div>
+                                    </div>
+
+                                    <!-- BOTÓN DE ACCIÓN -->
+                                    <button type="submit" class="btn btn-primary w-100" id="btn-predecir">
+                                        <i class="bi bi-lightning-charge me-1"></i> Calcular Riesgo
+                                    </button>
+                                </form>
+
+                                <!-- PANEL DE RESULTADOS -->
+                                <div id="resultado-predict" class="mt-3 d-none">
+                                    <label class="form-label fw-bold" id="resultado-etiqueta">—</label>
+                                    <div class="progress">
+                                        <div id="barra-probabilidad" class="progress-bar" role="progressbar" style="width: 0%;">0%</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ======================================================= -->
+                    <!-- TABLA DE HISTORIAL DE PREDICCIONES Y CONFIRMACIÓN REAL  -->
+                    <!-- ======================================================= -->
+                    <div class="card card-dash p-3 mb-4">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold mb-0">
+                                <i class="bi bi-clock-history me-2 text-primary"></i> Historial de Predicciones Recientes
+                            </h5>
+                            <span class="badge bg-secondary" id="badge-total-predicciones">0 registros</span>
+                        </div>
+                        <p class="text-muted small">
+                            Selecciona el <strong>Resultado Real</strong> de cada paciente para alimentar la <strong>Matriz de Confusión En Vivo</strong> en tiempo real.
+                        </p>
+
+                        <div class="table-responsive p-0 shadow-none border-0">
+                            <table class="table table-hover align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Fecha</th>
+                                        <th>Paciente</th>
+                                        <th>Riesgo IA</th>
+                                        <th>Probabilidad</th>
+                                        <th>Resultado Real (Confirmar)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tabla-predicciones">
+                                    <tr>
+                                        <td colspan="6" class="text-center text-muted py-3">Cargando historial de predicciones…</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <!-- ======================================================= -->
+
+                    {% endif %}
                 </div>
             </div>
         </main>
     </div>
 </div>
 
-<!-- MODALES -->
+<!-- ==========================================
+     VENTANAS MODALES (MODALS)
+     ========================================== -->
+
+<!-- 1. MODAL PACIENTE -->
 <div class="modal fade" id="modalPaciente" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header"><h5 class="modal-title">Gestión de Paciente</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-header"><h5 class="modal-title fw-bold">Gestión de Paciente</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <form id="form-paciente">
                 <div class="modal-body">
                     <input type="hidden" id="p-id">
@@ -286,9 +499,7 @@
                     <div class="mb-3"><input type="text" id="p-tel" class="form-control" placeholder="Teléfono"></div>
                     <div class="mb-3"><input type="email" id="p-email" class="form-control" placeholder="Correo Electrónico"></div>
                     <div class="mb-3 autocomplete-box">
-                        <input type="text" id="p-direccion" class="form-control" placeholder="Dirección (para ubicar en el mapa)" autocomplete="off">
-                        <div id="p-direccion-list" class="autocomplete-list d-none"></div>
-                        <input type="hidden" id="p-lat"><input type="hidden" id="p-lng">
+                        <input type="text" id="p-direccion" class="form-control" placeholder="Dirección" autocomplete="off">
                     </div>
                     <div class="row g-2 mb-3">
                         <div class="col"><input type="text" id="p-grupo" class="form-control" placeholder="Grupo Sanguíneo (ej. O+)"></div>
@@ -301,10 +512,11 @@
     </div>
 </div>
 
+<!-- 2. MODAL MÉDICO -->
 <div class="modal fade" id="modalMedico" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header"><h5 class="modal-title">Gestión de Médico</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-header"><h5 class="modal-title fw-bold">Gestión de Médico</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <form id="form-medico">
                 <div class="modal-body">
                     <input type="hidden" id="m-id">
@@ -329,10 +541,11 @@
     </div>
 </div>
 
+<!-- 3. MODAL CITA -->
 <div class="modal fade" id="modalCita" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header"><h5 class="modal-title">Gestión de Cita</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-header"><h5 class="modal-title fw-bold">Gestión de Cita</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <form id="form-cita">
                 <div class="modal-body">
                     <input type="hidden" id="c-id">
@@ -357,10 +570,11 @@
     </div>
 </div>
 
+<!-- 4. MODAL TRIAJE -->
 <div class="modal fade" id="modalTriaje" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header"><h5 class="modal-title">Gestión de Triaje</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-header"><h5 class="modal-title fw-bold">Gestión de Triaje</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <form id="form-triaje">
                 <div class="modal-body">
                     <input type="hidden" id="t-id">
@@ -382,10 +596,11 @@
     </div>
 </div>
 
+<!-- 5. MODAL HISTORIAL CLÍNICO -->
 <div class="modal fade" id="modalHistorial" tabindex="-1">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
-            <div class="modal-header"><h5 class="modal-title">Gestión de Historial Clínico</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-header"><h5 class="modal-title fw-bold">Gestión de Historial Clínico</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <form id="form-historial">
                 <div class="modal-body">
                     <input type="hidden" id="h-id">
@@ -395,7 +610,6 @@
                         <div class="col-8"><input type="text" id="h-diagnostico" class="form-control" placeholder="Diagnóstico Presuntivo" required></div>
                         <div class="col-4 autocomplete-box">
                             <input type="text" id="h-cie10" class="form-control" placeholder="Código CIE-10" autocomplete="off">
-                            <div id="h-cie10-list" class="autocomplete-list d-none"></div>
                         </div>
                     </div>
                     <div class="mb-3"><textarea id="h-tratamiento" class="form-control" placeholder="Tratamiento / Receta Médica" rows="3" required></textarea></div>
@@ -406,10 +620,11 @@
     </div>
 </div>
 
+<!-- 6. MODAL FACTURACIÓN -->
 <div class="modal fade" id="modalFacturacion" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header"><h5 class="modal-title">Gestión de Comprobante</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-header"><h5 class="modal-title fw-bold">Gestión de Comprobante</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <form id="form-facturacion">
                 <div class="modal-body">
                     <input type="hidden" id="f-id">
@@ -420,7 +635,7 @@
                         <div class="col"><input type="text" id="f-correlativo" class="form-control" placeholder="000001" required></div>
                     </div>
                     <div class="row g-2 mb-3">
-                        <div class="col"><input type="number" step="0.01" id="f-monto" class="form-control" placeholder="Monto Total (S/, IGV incluido)" required></div>
+                        <div class="col"><input type="number" step="0.01" id="f-monto" class="form-control" placeholder="Monto Total (S/)" required></div>
                         <div class="col">
                             <select id="f-metodo" class="form-select">
                                 <option value="Efectivo">Efectivo</option>
@@ -436,17 +651,18 @@
     </div>
 </div>
 
+<!-- 7. MODAL FARMACIA -->
 <div class="modal fade" id="modalFarmacia" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header"><h5 class="modal-title">Gestión de Producto</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-header"><h5 class="modal-title fw-bold">Gestión de Producto</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <form id="form-farmacia">
                 <div class="modal-body">
                     <input type="hidden" id="far-id">
                     <div class="mb-3"><input type="text" id="far-codigo" class="form-control" placeholder="Código de Medicamento" required></div>
                     <div class="mb-3"><input type="text" id="far-nombre" class="form-control" placeholder="Nombre Comercial / Genérico" required></div>
                     <div class="row g-2 mb-3">
-                        <div class="col"><input type="text" id="far-tipo" class="form-control" placeholder="Presentación (Jarabe, Tabletas)" required></div>
+                        <div class="col"><input type="text" id="far-tipo" class="form-control" placeholder="Presentación" required></div>
                         <div class="col"><input type="number" id="far-stock" class="form-control" placeholder="Stock" required></div>
                     </div>
                     <div class="row g-2 mb-3">
@@ -460,10 +676,11 @@
     </div>
 </div>
 
+<!-- 8. MODAL LABORATORIO -->
 <div class="modal fade" id="modalLaboratorio" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header"><h5 class="modal-title">Gestión de Examen</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-header"><h5 class="modal-title fw-bold">Gestión de Examen</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <form id="form-laboratorio">
                 <div class="modal-body">
                     <input type="hidden" id="lab-id">
@@ -485,19 +702,18 @@
     </div>
 </div>
 
+<!-- 9. MODAL HOSPITALIZACIÓN -->
 <div class="modal fade" id="modalHospitalizacion" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header"><h5 class="modal-title">Gestión de Hospitalización</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-header"><h5 class="modal-title fw-bold">Gestión de Hospitalización</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <form id="form-hospitalizacion">
                 <div class="modal-body">
                     <input type="hidden" id="hosp-id">
                     <div class="mb-3"><select id="hosp-paciente" class="form-select" required><option value="">Seleccione Paciente</option></select></div>
                     <div class="mb-3"><select id="hosp-medico" class="form-select" required><option value="">Seleccione Médico Responsable</option></select></div>
-                    <div class="mb-3">
-                        <select id="hosp-cama" class="form-select" required><option value="">Seleccione Cama Disponible</option></select>
-                    </div>
-                    <div class="mb-3"><textarea id="hosp-diag" class="form-control" placeholder="Motivo / Diagnóstico de Ingreso" rows="2" required></textarea></div>
+                    <div class="mb-3"><select id="hosp-cama" class="form-select" required><option value="">Seleccione Cama Disponible</option></select></div>
+                    <div class="mb-3"><textarea id="hosp-diag" class="form-control" placeholder="Diagnóstico de Ingreso" rows="2" required></textarea></div>
                 </div>
                 <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button><button type="submit" class="btn btn-primary">Guardar</button></div>
             </form>
@@ -505,28 +721,90 @@
     </div>
 </div>
 
+<!-- 10. MODAL ENVIAR NOTIFICACIÓN -->
 <div class="modal fade" id="modalNotificacion" tabindex="-1">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
-            <div class="modal-header"><h5 class="modal-title">Enviar Notificación</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="bi bi-bell me-2"></i>Enviar Notificación</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
             <form id="form-notificacion">
                 <div class="modal-body">
-                    <input type="hidden" id="not-id">
-                    <div class="mb-3"><input type="email" id="not-email" class="form-control" placeholder="Correo Destinatario" required></div>
-                    <div class="mb-3"><input type="text" id="not-asunto" class="form-control" placeholder="Asunto" required></div>
-                    <div class="mb-3"><textarea id="not-mensaje" class="form-control" placeholder="Escriba su mensaje aquí..." rows="3" required></textarea></div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Canal de Envío</label>
+                        <select class="form-select" id="n-canal" onchange="cambiarCanalNotificacion()" required>
+                            <option value="Email">Correo Electrónico (Gmail API/SMTP)</option>
+                            <option value="WhatsApp">WhatsApp Web / Mensaje Directo</option>
+                            <option value="Ambos">Ambos (Correo + WhatsApp)</option>
+                        </select>
+                    </div>
+                    <div class="mb-3" id="group-email">
+                        <label class="form-label fw-semibold">Correo Destinatario</label>
+                        <input type="email" class="form-control" id="n-destinatario" placeholder="paciente@correo.com">
+                    </div>
+                    <div class="mb-3 d-none" id="group-telefono">
+                        <label class="form-label fw-semibold">Teléfono / WhatsApp</label>
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-whatsapp text-success"></i></span>
+                            <input type="text" class="form-control" id="n-telefono" placeholder="Ej: 987654321">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Asunto / Título</label>
+                        <input type="text" class="form-control" id="n-asunto" placeholder="Ej: Recordatorio de Cita" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Mensaje</label>
+                        <textarea class="form-control" id="n-mensaje" rows="4" placeholder="Escriba su mensaje aquí..." required></textarea>
+                    </div>
                 </div>
-                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button><button type="submit" class="btn btn-primary">Enviar</button></div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-send-fill me-1"></i> Enviar</button>
+                </div>
             </form>
         </div>
     </div>
 </div>
 
-<!-- SCRIPTS -->
+<!-- 11. MODAL EDITAR NOTIFICACIÓN -->
+<div class="modal fade" id="modalEditarNotificacion" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="bi bi-pencil-square me-2"></i>Editar Notificación</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="form-editar-notificacion" onsubmit="guardarEdicionNotificacion(event)">
+                <input type="hidden" id="edit-n-id">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Asunto / Título</label>
+                        <input type="text" class="form-control" id="edit-n-asunto" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Mensaje</label>
+                        <textarea class="form-control" id="edit-n-mensaje" rows="4" required></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-save me-1"></i> Guardar Cambios</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- LIBRERÍAS Y SCRIPTS DE CONTROL -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="{{ url_for('static', filename='js/mapa.js') }}"></script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% if modelo_disponible %}
+<script src="{{ url_for('static', filename='js/ml_dashboard.js') }}"></script>
+{% endif %}
 </body>
 </html>

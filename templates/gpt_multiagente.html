@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedControl Pro - Junta Médica Multiagente</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background-color: #f8fafc; color: #1e293b; }
+        .sidebar { min-height: 100vh; background-color: #1e293b; color: #fff; }
+        .sidebar .nav-link { color: #94a3b8; padding: 12px 20px; font-weight: 500; border-radius: 8px; margin: 4px 12px; text-decoration: none; display: flex; align-items: center; }
+        .sidebar .nav-link:hover, .sidebar .nav-link.active { background-color: #0f172a; color: #38bdf8; }
+        .sidebar .brand { font-size: 1.4rem; font-weight: 700; color: #38bdf8; padding: 24px 20px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.08); }
+        .content-header { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 16px 32px; }
+        
+        .agent-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; font-size: 0.85rem; }
+        .chat-container { background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; height: calc(100vh - 240px); display: flex; flex-direction: column; }
+        .chat-mensajes { flex: 1; overflow-y: auto; padding: 24px; background-color: #f8fafc; }
+        
+        .msg-wrapper { display: flex; margin-bottom: 20px; gap: 12px; }
+        .msg-wrapper.user { flex-direction: row-reverse; }
+        .avatar { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink: 0; }
+        .avatar-bot { background-color: #0284c7; color: #fff; }
+        .avatar-user { background-color: #1e293b; color: #fff; }
+        
+        .msg { max-width: 85%; padding: 16px 20px; border-radius: 14px; background: #fff; border: 1px solid #e2e8f0; box-shadow: 0 2px 4px rgba(0,0,0,0.03); }
+        .msg-user { background: #2563eb; color: #fff; }
+        .msg-error { background: #fef2f2; color: #991b1b; }
+
+        .msg h3, .msg h4 { color: #1e3a8a; font-weight: 700; margin-top: 12px; }
+    </style>
+</head>
+<body>
+
+<div class="container-fluid">
+    <div class="row">
+        <!-- SIDEBAR -->
+        <nav class="col-md-3 col-lg-2 sidebar d-md-block p-0">
+            <div class="brand"><i class="bi bi-hospital me-2"></i>MedControl</div>
+            <ul class="nav flex-column mt-3">
+                <li class="nav-item"><a class="nav-link" href="/"><i class="bi bi-speedometer2 me-2"></i> Dashboard Principal</a></li>
+                <li class="nav-item"><a class="nav-link" href="/ml/dashboard"><i class="bi bi-cpu me-2"></i> IA - Riesgo de Reingreso</a></li>
+                <li class="nav-item"><a class="nav-link" href="/gpt/asistente"><i class="bi bi-robot me-2"></i> Asistente Clínico GPT</a></li>
+                <li class="nav-item"><a class="nav-link active" href="/gpt/multiagente"><i class="bi bi-people-fill me-2"></i> Junta Médica MAS</a></li>
+            </ul>
+        </nav>
+
+        <!-- CONTENIDO -->
+        <main class="col-md-9 ms-sm-auto col-lg-10 px-0">
+            <div class="content-header d-flex justify-content-between align-items-center">
+                <h4 class="m-0 fw-bold"><i class="bi bi-people-fill text-primary me-2"></i>Junta Médica Multiagente (MAS)</h4>
+                <span class="badge bg-primary px-3 py-2">4 Agentes IA Especializados en Cadena</span>
+            </div>
+
+            <div class="p-4">
+                <!-- PANEL VISUAL DE LOS AGENTES ESPECIALIZADOS -->
+                <div class="row g-2 mb-3">
+                    <div class="col-md-3">
+                        <div class="agent-card">
+                            <strong class="text-primary"><i class="bi bi-person-badge me-1"></i> Agente 1</strong>
+                            <div>Diagnóstico Diferencial</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="agent-card">
+                            <strong class="text-danger"><i class="bi bi-activity me-1"></i> Agente 2</strong>
+                            <div>Triaje y Riesgo Vital</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="agent-card">
+                            <strong class="text-success"><i class="bi bi-capsule me-1"></i> Agente 3</strong>
+                            <div>Protocolos y Fármacos</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="agent-card">
+                            <strong class="text-warning"><i class="bi bi-diagram-3 me-1"></i> Agente Orquestador</strong>
+                            <div>Síntesis y Dictamen</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-container">
+                    <div id="chat-mensajes" class="chat-mensajes">
+                        <div class="msg-wrapper bot">
+                            <div class="avatar avatar-bot"><i class="bi bi-people-fill"></i></div>
+                            <div class="msg">
+                                <strong>Bienvenido a la Junta Médica Multiagente de MedControl Pro.</strong>
+                                <p class="mb-0 mt-1">Al ingresar un caso clínico, los 3 agentes especialistas procesarán el caso en paralelo y el Agente Orquestador emitirá un dictamen unificado.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="p-3 border-top bg-white">
+                        <div class="d-flex gap-2">
+                            <textarea id="input-mensaje" class="form-control" rows="2" placeholder="Ej: Paciente masculino de 62 años, antecedente de hipertensión, dolor torácico de 30 min, PA 170/100, FC 105, disnea leve..."></textarea>
+                            <button id="btn-enviar" class="btn btn-primary px-4"><i class="bi bi-send-fill fs-5"></i></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<script>
+    marked.setOptions({ gfm: true, breaks: true });
+
+    const chatMensajes = document.getElementById('chat-mensajes');
+    const inputMensaje = document.getElementById('input-mensaje');
+    const btnEnviar = document.getElementById('btn-enviar');
+
+    async function enviar() {
+        const texto = inputMensaje.value.trim();
+        if (!texto) return;
+
+        // Agregar mensaje del usuario
+        chatMensajes.innerHTML += `
+            <div class="msg-wrapper user">
+                <div class="avatar avatar-user"><i class="bi bi-person-fill"></i></div>
+                <div class="msg msg-user">${texto}</div>
+            </div>
+        `;
+        
+        inputMensaje.value = '';
+        btnEnviar.disabled = true;
+
+        // Indicador de procesamiento por los 4 agentes
+        const tempId = 'loading-' + Date.now();
+        chatMensajes.innerHTML += `
+            <div id="${tempId}" class="msg-wrapper bot">
+                <div class="avatar avatar-bot"><i class="bi bi-people-fill"></i></div>
+                <div class="msg text-muted">
+                    <i class="bi bi-hourglass-split me-2"></i>La Junta Médica (Agentes 1, 2, 3 y Orquestador) está evaluando el caso...
+                </div>
+            </div>
+        `;
+        chatMensajes.scrollTop = chatMensajes.scrollHeight;
+
+        try {
+            const res = await fetch('/gpt/api/multiagente', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mensaje: texto })
+            });
+
+            document.getElementById(tempId).remove();
+            const data = await res.json();
+
+            if (!res.ok) {
+                chatMensajes.innerHTML += `<div class="msg msg-error mb-3">${data.error}</div>`;
+            } else {
+                chatMensajes.innerHTML += `
+                    <div class="msg-wrapper bot">
+                        <div class="avatar avatar-bot"><i class="bi bi-people-fill"></i></div>
+                        <div class="msg">${marked.parse(data.respuesta)}</div>
+                    </div>
+                `;
+            }
+        } catch (e) {
+            document.getElementById(tempId)?.remove();
+            chatMensajes.innerHTML += `<div class="msg msg-error mb-3">Error de conexión con la Junta Médica.</div>`;
+        } finally {
+            btnEnviar.disabled = false;
+            chatMensajes.scrollTop = chatMensajes.scrollHeight;
+        }
+    }
+
+    btnEnviar.addEventListener('click', enviar);
+    inputMensaje.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            enviar();
+        }
+    });
+</script>
+</body>
+</html>
