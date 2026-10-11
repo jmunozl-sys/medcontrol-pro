@@ -1089,15 +1089,17 @@ def enviar_correo_smtp(destinatario, asunto, mensaje):
         msg['From'] = f"MedControl Pro <{GMAIL_USER}>"
         msg['To'] = destinatario
         msg['Subject'] = asunto
-        
+
+        mensaje_html = mensaje.replace('\n', '<br>')
         html_content = f"""
-        <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; max-width: 600px;">
+        <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
             <h3 style="color: #0d6efd; margin-top: 0;">MedControl Pro - Notificación</h3>
-            <p style="font-size: 15px; color: #333;">{mensaje.replace('\n', '<br>')}</p>
+            <p style="font-size: 15px; color: #333;">{mensaje_html}</p>
             <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
             <small style="color: #888;">Este es un mensaje automático emitido por el sistema MedControl Pro.</small>
         </div>
         """
+
         msg.attach(MIMEText(html_content, 'html'))
 
         server = smtplib.SMTP('smtp.gmail.com', 587)
