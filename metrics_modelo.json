@@ -1,10 +1,10 @@
 {
-  "accuracy": 0.685,
-  "precision": 0.4861,
-  "recall": 0.5738,
-  "f1_score": 0.5263,
-  "n_entrenamiento": 1600,
-  "n_prueba": 400,
+  "accuracy": 0.7078,
+  "precision": 0.5714,
+  "recall": 0.6667,
+  "f1_score": 0.6154,
+  "n_entrenamiento": 614,
+  "n_prueba": 154,
   "features": [
     "edad",
     "presion_sistolica",
@@ -16,9 +16,9 @@
     "comorbilidades"
   ],
   "matriz_confusion": {
-    "tn": 204,
-    "fp": 74,
-    "fn": 52,
-    "tp": 70
+    "tn": 73,
+    "fp": 27,
+    "fn": 18,
+    "tp": 36
   }
 }
